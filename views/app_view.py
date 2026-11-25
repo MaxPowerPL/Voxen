@@ -228,6 +228,11 @@ class AppView(ctk.CTkFrame):
         if self.controller and hasattr(self, "current_server_id"):
             self.controller.handle_manage_members_click(self.current_server_id)
 
+    def _on_analytics_click(self):
+        """Delegates server analytics to the controller."""
+        if self.controller and hasattr(self, "current_server_id"):
+            self.controller.handle_analytics_click(self.current_server_id)
+
     # ==========================================
     # ŚRODKOWA KOLUMNA - KANAŁY / DMs
     # ==========================================
@@ -273,6 +278,17 @@ class AppView(ctk.CTkFrame):
         )
         self.manage_members_button.pack(side="right", padx=10)
         self.manage_members_button.configure(state="disabled")
+
+        self.analytics_button = ctk.CTkButton(
+            self.channels_header,
+            text="📊",
+            width=36,
+            height=32,
+            fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
+            command=self._on_analytics_click
+        )
+        self.analytics_button.pack(side="right", padx=(0, 2))
 
         # === USER PANEL NA SAMYM DOLE (STAŁY) ===
         self._create_user_panel()
@@ -1342,6 +1358,74 @@ class AppView(ctk.CTkFrame):
             width=100,
             command=dialog.destroy
         ).pack(side="left", padx=6)
+
+    def show_server_analytics_modal(self, analytics: dict) -> None:
+        """Shows aggregate server metrics in a compact modal."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Analityka serwera")
+        dialog.geometry("520x360")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text=f"📊 {analytics.get('server_name', 'Serwer')}",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(16, 12))
+
+        grid = ctk.CTkFrame(dialog, fg_color="transparent")
+        grid.pack(fill="x", padx=20)
+        cards = [
+            ("Członkowie", analytics.get("member_count", 0)),
+            ("Kanały", analytics.get("channel_count", 0)),
+            ("Wiadomości", analytics.get("message_count", 0)),
+            ("Zdarzenia", analytics.get("activity_count", 0))
+        ]
+        for index, (label, value) in enumerate(cards):
+            card = ctk.CTkFrame(grid, fg_color=Colors.BG_RIGHT, corner_radius=8)
+            card.grid(row=0, column=index, padx=5, sticky="nsew")
+            grid.grid_columnconfigure(index, weight=1)
+            ctk.CTkLabel(
+                card,
+                text=str(value),
+                font=("Segoe UI", 22, "bold"),
+                text_color=Colors.BUTTON_PRIMARY
+            ).pack(pady=(12, 2))
+            ctk.CTkLabel(
+                card,
+                text=label,
+                text_color=Colors.TEXT_SECONDARY
+            ).pack(pady=(0, 12))
+
+        role_counts = analytics.get("role_counts", {})
+        role_frame = ctk.CTkFrame(dialog, fg_color=Colors.BG_RIGHT, corner_radius=8)
+        role_frame.pack(fill="x", padx=20, pady=20)
+        ctk.CTkLabel(
+            role_frame,
+            text="Role członków",
+            font=Fonts.LABEL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(anchor="w", padx=12, pady=(10, 4))
+        role_text = "  •  ".join(
+            f"{role}: {count}"
+            for role, count in sorted(role_counts.items())
+        ) or "Brak członków"
+        ctk.CTkLabel(
+            role_frame,
+            text=role_text,
+            text_color=Colors.TEXT_SECONDARY,
+            anchor="w"
+        ).pack(anchor="w", padx=12, pady=(0, 12))
+
+        ctk.CTkButton(
+            dialog,
+            text="Zamknij",
+            fg_color="transparent",
+            width=100,
+            command=dialog.destroy
+        ).pack(pady=(0, 12))
 
     def show_activity_logs_modal(self, server_name: str, logs: list) -> None:
         """Shows a read-only member activity log modal."""

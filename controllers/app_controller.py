@@ -418,6 +418,14 @@ class AppController:
         else:
             print(f"Błąd tworzenia serwera: {result}")
 
+    def handle_analytics_click(self, server_id: int) -> None:
+        """Opens aggregate analytics for a server."""
+        if server_id is None:
+            return
+        analytics = self.server_model.get_analytics(server_id)
+        if hasattr(self.view, "show_server_analytics_modal"):
+            self.view.show_server_analytics_modal(analytics)
+
     def handle_manage_members_click(self, server_id: int) -> None:
         """Opens server membership management for Owner/Admin users."""
         actor_id = self.current_user.get("id", 1)

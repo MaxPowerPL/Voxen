@@ -127,6 +127,10 @@ class ServerModel:
         """Gets server member activity logs."""
         return self.db.get_member_activity_logs(server_id, limit)
 
+    def get_analytics(self, server_id: int) -> Dict[str, Any]:
+        """Gets aggregate server analytics."""
+        return self.db.get_server_analytics(server_id)
+
     def set_channel_permission(
         self,
         channel_id: int,

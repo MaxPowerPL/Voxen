@@ -961,6 +961,60 @@ class DatabaseManager:
             cursor.execute("SELECT id, name, icon, owner_id, created_at FROM servers ORDER BY id ASC")
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_server_analytics(self, server_id: int) -> Dict[str, Any]:
+        """Returns aggregate member, channel and message metrics for a server."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM servers WHERE id = ?", (server_id,))
+            server = cursor.fetchone()
+            if not server:
+                return {
+                    "server_id": server_id,
+                    "server_name": "",
+                    "member_count": 0,
+                    "channel_count": 0,
+                    "message_count": 0,
+                    "role_counts": {},
+                    "activity_count": 0
+                }
+
+            server_name = server["name"]
+            cursor.execute("SELECT COUNT(*) FROM server_members WHERE server_id = ?", (server_id,))
+            member_count = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM channels WHERE server_id = ?", (server_id,))
+            channel_count = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT COUNT(*)
+                FROM messages
+                WHERE target LIKE ?
+            """, (f"{server_name}#%",))
+            message_count = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT role, COUNT(*) AS count
+                FROM server_members
+                WHERE server_id = ?
+                GROUP BY role
+            """, (server_id,))
+            role_counts = {row["role"]: row["count"] for row in cursor.fetchall()}
+
+            cursor.execute("""
+                SELECT COUNT(*) FROM member_activity_logs WHERE server_id = ?
+            """, (server_id,))
+            activity_count = cursor.fetchone()[0]
+
+            return {
+                "server_id": server_id,
+                "server_name": server_name,
+                "member_count": member_count,
+                "channel_count": channel_count,
+                "message_count": message_count,
+                "role_counts": role_counts,
+                "activity_count": activity_count
+            }
+
     def set_server_member_role(
         self,
         server_id: int,
