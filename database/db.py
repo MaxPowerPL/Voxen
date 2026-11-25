@@ -872,11 +872,25 @@ class DatabaseManager:
             cursor.execute("SELECT id, name, icon, owner_id, created_at FROM servers ORDER BY id ASC")
             return [dict(row) for row in cursor.fetchall()]
 
-    def set_server_member_role(self, server_id: int, user_id: int, role: str) -> tuple:
+    def set_server_member_role(
+        self,
+        server_id: int,
+        user_id: int,
+        role: str,
+        actor_id: Optional[int] = None
+    ) -> tuple:
         """Assigns owner, admin, moderator or member role to a server member."""
         role = role.strip().lower()
         if role not in ("owner", "admin", "moderator", "member"):
             return False, "Nieznana rola serwera."
+        if role == "owner":
+            return False, "Właściciela serwera można ustawić tylko podczas jego tworzenia."
+        if actor_id is not None:
+            actor_role = self.get_server_member_role(server_id, actor_id)
+            if actor_role not in ("owner", "admin"):
+                return False, "Brak uprawnień do zarządzania członkami."
+            if user_id == actor_id and actor_role == "admin":
+                return False, "Administrator nie może zmienić własnej roli."
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
             with self._lock, self._get_connection() as conn:
@@ -925,6 +939,61 @@ class DatabaseManager:
                 END, u.username ASC
             """, (server_id,))
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_available_server_users(self, server_id: int) -> list:
+        """Returns users that are not yet members of the server."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT u.id, u.username, u.email
+                FROM users u
+                WHERE u.id NOT IN (
+                    SELECT user_id FROM server_members WHERE server_id = ?
+                )
+                ORDER BY u.username ASC
+            """, (server_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def add_server_member(self, server_id: int, user_id: int, role: str = "member") -> tuple:
+        """Adds a user to a server or updates their membership role."""
+        role = role.strip().lower()
+        if role not in ("admin", "moderator", "member"):
+            return False, "Niepoprawna rola członka."
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+            if not cursor.fetchone():
+                return False, "Nie znaleziono użytkownika."
+            cursor.execute("SELECT id FROM servers WHERE id = ?", (server_id,))
+            if not cursor.fetchone():
+                return False, "Nie znaleziono serwera."
+            cursor.execute("""
+                INSERT INTO server_members (server_id, user_id, role, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(server_id, user_id) DO UPDATE SET role = excluded.role
+            """, (server_id, user_id, role, now_str))
+            conn.commit()
+            return True, {"server_id": server_id, "user_id": user_id, "role": role}
+
+    def remove_server_member(self, server_id: int, user_id: int) -> tuple:
+        """Removes a member while protecting the server owner."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT owner_id FROM servers WHERE id = ?", (server_id,))
+            server = cursor.fetchone()
+            if not server:
+                return False, "Nie znaleziono serwera."
+            if server["owner_id"] == user_id:
+                return False, "Nie można usunąć właściciela serwera."
+            cursor.execute("""
+                DELETE FROM server_members
+                WHERE server_id = ? AND user_id = ?
+            """, (server_id, user_id))
+            conn.commit()
+            if cursor.rowcount == 0:
+                return False, "Użytkownik nie jest członkiem serwera."
+            return True, "Członek został usunięty."
 
     def can_manage_server(self, server_id: int, user_id: int) -> bool:
         """Owner and admin can manage server and channel structure."""

@@ -54,9 +54,15 @@ class ServerModel:
         """Usuwa kanał z serwera"""
         return self.db.delete_channel(channel_id=channel_id, actor_id=actor_id)
 
-    def set_member_role(self, server_id: int, user_id: int, role: str) -> tuple:
+    def set_member_role(
+        self,
+        server_id: int,
+        user_id: int,
+        role: str,
+        actor_id: Optional[int] = None
+    ) -> tuple:
         """Assigns a role in a server."""
-        return self.db.set_server_member_role(server_id, user_id, role)
+        return self.db.set_server_member_role(server_id, user_id, role, actor_id)
 
     def get_member_role(self, server_id: int, user_id: int) -> str:
         """Gets a member role in a server."""
@@ -73,3 +79,15 @@ class ServerModel:
     def can_moderate(self, server_id: int, user_id: int) -> bool:
         """Checks owner/admin/moderator message-moderation permission."""
         return self.db.can_moderate_server(server_id, user_id)
+
+    def get_available_users(self, server_id: int) -> list:
+        """Gets users that can be added to a server."""
+        return self.db.get_available_server_users(server_id)
+
+    def add_member(self, server_id: int, user_id: int, role: str = "member") -> tuple:
+        """Adds or updates a server member."""
+        return self.db.add_server_member(server_id, user_id, role)
+
+    def remove_member(self, server_id: int, user_id: int) -> tuple:
+        """Removes a server member."""
+        return self.db.remove_server_member(server_id, user_id)

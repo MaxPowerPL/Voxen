@@ -397,6 +397,51 @@ class AppController:
         else:
             print(f"Błąd tworzenia serwera: {result}")
 
+    def handle_manage_members_click(self, server_id: int) -> None:
+        """Opens server membership management for Owner/Admin users."""
+        actor_id = self.current_user.get("id", 1)
+        if not self.server_model.can_manage(server_id, actor_id):
+            if hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast("Uprawnienia", "Tylko właściciel lub administrator może zarządzać członkami.")
+            return
+        members = self.server_model.get_members(server_id)
+        available = self.server_model.get_available_users(server_id)
+
+        def refresh() -> None:
+            self.handle_manage_members_click(server_id)
+
+        def add_member(user_id: int, role: str) -> None:
+            success, result = self.server_model.add_member(server_id, user_id, role)
+            if not success and hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast("Członkowie", str(result))
+            refresh()
+
+        def set_role(user_id: int, role: str) -> None:
+            success, result = self.server_model.set_member_role(
+                server_id,
+                user_id,
+                role,
+                actor_id
+            )
+            if not success and hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast("Członkowie", str(result))
+            refresh()
+
+        def remove_member(user_id: int) -> None:
+            success, result = self.server_model.remove_member(server_id, user_id)
+            if hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast("Członkowie", str(result))
+            refresh()
+
+        self.view.show_manage_members_modal(
+            server_name=self.current_server,
+            members=members,
+            available_users=available,
+            add_callback=add_member,
+            role_callback=set_role,
+            remove_callback=remove_member
+        )
+
     def handle_add_channel_click(self, server_id: int):
         """Otwiera okno dialogowe tworzenia kanału tekstowego"""
         uid = self.current_user.get("id", 1)

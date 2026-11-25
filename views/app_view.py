@@ -223,6 +223,11 @@ class AppView(ctk.CTkFrame):
         if self.controller and hasattr(self, 'current_server_id'):
             self.controller.handle_add_channel_click(self.current_server_id)
 
+    def _on_manage_members_click(self):
+        """Delegates server member management to the controller."""
+        if self.controller and hasattr(self, "current_server_id"):
+            self.controller.handle_manage_members_click(self.current_server_id)
+
     # ==========================================
     # ŚRODKOWA KOLUMNA - KANAŁY / DMs
     # ==========================================
@@ -256,6 +261,18 @@ class AppView(ctk.CTkFrame):
             anchor="w"
         )
         self.server_name_label.pack(side="left", padx=16, fill="both", expand=True)
+
+        self.manage_members_button = ctk.CTkButton(
+            self.channels_header,
+            text="👥",
+            width=36,
+            height=32,
+            fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
+            command=self._on_manage_members_click
+        )
+        self.manage_members_button.pack(side="right", padx=10)
+        self.manage_members_button.configure(state="disabled")
 
         # === USER PANEL NA SAMYM DOLE (STAŁY) ===
         self._create_user_panel()
@@ -960,6 +977,8 @@ class AppView(ctk.CTkFrame):
         """Updates server-management controls for the current member role."""
         if hasattr(self, "add_channel_button"):
             self.add_channel_button.configure(state="normal" if can_manage else "disabled")
+        if hasattr(self, "manage_members_button"):
+            self.manage_members_button.configure(state="normal" if can_manage else "disabled")
         role_labels = {
             "owner": "Właściciel",
             "admin": "Administrator",
@@ -1199,6 +1218,113 @@ class AppView(ctk.CTkFrame):
         ctk.CTkButton(btn_box, text="Anuluj", fg_color="transparent", hover_color=Colors.BG_MAIN, width=100, command=dialog.destroy).pack(side="left")
         ctk.CTkButton(btn_box, text="Utwórz", fg_color=Colors.BUTTON_PRIMARY, hover_color=Colors.BUTTON_PRIMARY_HOVER, width=120, command=_submit).pack(side="right")
         name_entry.bind("<Return>", lambda e: _submit())
+
+    def show_manage_members_modal(
+        self,
+        server_name: str,
+        members: list,
+        available_users: list,
+        add_callback,
+        role_callback,
+        remove_callback
+    ) -> None:
+        """Opens a modal for assigning roles and managing server membership."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Członkowie serwera")
+        dialog.geometry("520x460")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text=f"Członkowie: {server_name}",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(16, 10))
+
+        add_frame = ctk.CTkFrame(dialog, fg_color=Colors.BG_RIGHT)
+        add_frame.pack(fill="x", padx=20, pady=(0, 10))
+
+        user_names = {
+            f"{u['username']} ({u['email']})": u["id"]
+            for u in available_users
+        }
+        user_var = ctk.StringVar(value=next(iter(user_names), "Brak dostępnych użytkowników"))
+        role_var = ctk.StringVar(value="member")
+
+        ctk.CTkComboBox(
+            add_frame,
+            values=list(user_names) or ["Brak dostępnych użytkowników"],
+            variable=user_var,
+            state="readonly",
+            width=260
+        ).pack(side="left", padx=(8, 6), pady=8)
+        ctk.CTkComboBox(
+            add_frame,
+            values=["member", "moderator", "admin"],
+            variable=role_var,
+            state="readonly",
+            width=100
+        ).pack(side="left", padx=4)
+
+        def _add_member():
+            user_id = user_names.get(user_var.get())
+            if user_id is not None:
+                add_callback(user_id, role_var.get())
+                dialog.destroy()
+
+        ctk.CTkButton(
+            add_frame,
+            text="Dodaj",
+            width=70,
+            command=_add_member
+        ).pack(side="right", padx=8)
+
+        scroll = ctk.CTkScrollableFrame(
+            dialog,
+            fg_color="transparent",
+            height=300
+        )
+        scroll.pack(fill="both", expand=True, padx=20, pady=(4, 10))
+
+        for member in members:
+            if member["role"] == "owner":
+                continue
+            row = ctk.CTkFrame(scroll, fg_color=Colors.BG_RIGHT)
+            row.pack(fill="x", pady=3)
+            ctk.CTkLabel(
+                row,
+                text=f"{member['username']}  •  {member['email']}",
+                anchor="w",
+                text_color=Colors.TEXT_PRIMARY
+            ).pack(side="left", padx=8, fill="x", expand=True)
+
+            role_choice = ctk.StringVar(value=member["role"])
+            ctk.CTkComboBox(
+                row,
+                values=["member", "moderator", "admin"],
+                variable=role_choice,
+                state="readonly",
+                width=110,
+                command=lambda value, uid=member["user_id"]: role_callback(uid, value)
+            ).pack(side="right", padx=(4, 4), pady=6)
+            ctk.CTkButton(
+                row,
+                text="Usuń",
+                width=58,
+                fg_color=Colors.DND,
+                hover_color=Colors.ERROR,
+                command=lambda uid=member["user_id"]: (remove_callback(uid), dialog.destroy())
+            ).pack(side="right", padx=(4, 8), pady=6)
+
+        ctk.CTkButton(
+            dialog,
+            text="Zamknij",
+            fg_color="transparent",
+            width=100,
+            command=dialog.destroy
+        ).pack(pady=(0, 12))
 
     def show_create_channel_modal(self, server_name: str, callback):
         """Otwiera okno modalne tworzenia nowego kanału tekstowego"""

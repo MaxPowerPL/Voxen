@@ -28,6 +28,14 @@ def test_server_roles():
     db = DatabaseManager(db_path=test_db)
     model = ServerModel(db=db)
 
+    for number in (1, 2, 3, 4):
+        ok, _ = db.create_user(
+            email=f"user{number}@voxen.dev",
+            password="password",
+            username=f"User{number}"
+        )
+        assert ok
+
     success, server = model.create_server(
         name="Role Guild",
         icon="🛡️",
@@ -39,17 +47,6 @@ def test_server_roles():
     assert model.get_member_role(server_id, 1) == "owner"
     assert model.can_manage(server_id, 1)
     assert model.can_moderate(server_id, 1)
-
-    for number in (1, 2, 3, 4):
-        ok, _ = db.create_user(
-            email=f"user{number}@voxen.dev",
-            password="password",
-            username=f"User{number}"
-        )
-        assert ok
-
-    owner_ok, _ = model.set_member_role(server_id, 1, "owner")
-    assert owner_ok
 
     admin_ok, admin = model.set_member_role(server_id, 2, "admin")
     moderator_ok, moderator = model.set_member_role(server_id, 3, "moderator")
@@ -90,6 +87,20 @@ def test_server_roles():
     invalid_ok, invalid_message = model.set_member_role(server_id, 5, "invalid")
     assert not invalid_ok
     assert invalid_message
+
+    available = model.get_available_users(server_id)
+    assert isinstance(available, list)
+
+    member_add_ok, _ = model.add_member(server_id, 4, "moderator")
+    assert member_add_ok
+    assert model.get_member_role(server_id, 4) == "moderator"
+
+    remove_ok, remove_message = model.remove_member(server_id, 4)
+    assert remove_ok
+    assert remove_message
+    owner_remove_ok, owner_remove_message = model.remove_member(server_id, 1)
+    assert not owner_remove_ok
+    assert owner_remove_message
 
     members = model.get_members(server_id)
     roles = {row["user_id"]: row["role"] for row in members}
