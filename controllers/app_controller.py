@@ -3,6 +3,7 @@ CONTROLLER - Obsługa logiki głównego ekranu aplikacji, serwerów, kanałów, 
 """
 
 import time
+from tkinter import filedialog
 from typing import Any, Dict, Optional
 from models.chat_model import ChatModel
 from models.presence_tracker import PresenceTracker
@@ -11,6 +12,7 @@ from models.typing_tracker import TypingTracker
 from network.connection import ConnectionState
 from network.protocol import Packet, PacketType
 from notifications.notifier import WindowsNotifier
+from storage.file_manager import FileManager
 from utils import Colors
 
 
@@ -47,6 +49,7 @@ class AppController:
         self.typing_tracker = TypingTracker(default_expiry=4.5)
         self.presence_tracker = PresenceTracker()
         self.db = getattr(self.chat_model, "db", None)
+        self.file_manager = FileManager()
 
         # Pobierz zapisany status obecności z SQLite
         uid = self.current_user.get("id") or self.current_user.get("email", "")
@@ -200,6 +203,7 @@ class AppController:
         target = packet.payload.get("target", "Direct Messages")
         content = packet.payload.get("content", "")
         is_dm = packet.payload.get("is_dm", True)
+        attachments = packet.payload.get("attachments", [])
 
         # Sprawdź czy wiadomość dotyczy aktualnie otwartej konwersacji/kanału
         if is_dm:
@@ -208,7 +212,7 @@ class AppController:
             is_active = (self.current_channel is not None and target == self.current_conversation)
 
         # 1. Trwały zapis w bazie SQLite z odpowiednim statusem przeczytania
-        self.chat_model.save_message(
+        message_id = self.chat_model.save_message(
             sender=sender,
             target=target,
             content=content,
@@ -216,6 +220,18 @@ class AppController:
             is_dm=is_dm,
             is_read=is_active
         )
+        if message_id and self.db:
+            for attachment in attachments:
+                self.db.save_attachment(
+                    message_id=message_id,
+                    filename=attachment.get("filename", ""),
+                    original_name=attachment.get("original_name", ""),
+                    file_type=attachment.get("file_type", "file"),
+                    file_size=attachment.get("file_size", 0),
+                    mime_type=attachment.get("mime_type", "application/octet-stream"),
+                    file_path=attachment.get("file_path", ""),
+                    thumbnail_path=attachment.get("thumbnail_path")
+                )
 
         # 2. Wyświetl w UI jeśli dotyczy otwartej konwersacji, w przeciwnym razie wyślij powiadomienie
         if is_active:
@@ -224,7 +240,8 @@ class AppController:
                 sender=sender,
                 text=content,
                 is_own=False,
-                is_bot=is_bot
+                is_bot=is_bot,
+                attachments=attachments
             )
         else:
             # Powiadomienie Windows Toast & In-App
@@ -514,8 +531,61 @@ class AppController:
             print(f"[Offline] Zapisano do bazy dla {target}: {message}")
 
     def handle_attach_click(self):
-        """Obsługuje załączanie pliku"""
-        print("Wybierz plik do wysłania")
+        """Opens a file dialog, validates and stores a selected attachment."""
+        file_path = filedialog.askopenfilename(
+            title="Wybierz plik",
+            filetypes=[("Wszystkie pliki", "*.*")]
+        )
+        if not file_path:
+            return
+
+        try:
+            valid, error = self.file_manager.validate_file(file_path)
+            if not valid:
+                if hasattr(self.view, "show_in_app_toast"):
+                    self.view.show_in_app_toast("Załącznik", error)
+                return
+
+            metadata = self.file_manager.store_file(file_path)
+            target = self.current_conversation or "Direct Messages"
+            is_dm = self.current_channel is None
+
+            message_id = self.chat_model.save_message(
+                sender=self.sender_name,
+                target=target,
+                content=f"Załącznik: {metadata['original_name']}",
+                is_dm=is_dm
+            )
+            if message_id and self.db:
+                self.db.save_attachment(
+                    message_id=message_id,
+                    filename=metadata["filename"],
+                    original_name=metadata["original_name"],
+                    file_type=metadata["file_type"],
+                    file_size=metadata["file_size"],
+                    mime_type=metadata["mime_type"],
+                    file_path=metadata["file_path"],
+                    thumbnail_path=metadata["thumbnail_path"]
+                )
+
+            self.view.add_message(
+                sender=self.sender_name,
+                text=f"Załącznik: {metadata['original_name']}",
+                is_own=True,
+                attachments=[metadata]
+            )
+
+            if self.network:
+                self.network.send_message(
+                    target=target,
+                    content=f"Załącznik: {metadata['original_name']}",
+                    sender=self.sender_name,
+                    is_dm=is_dm,
+                    attachments=[metadata]
+                )
+        except (OSError, ValueError) as exc:
+            if hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast("Załącznik", str(exc))
 
     def handle_emoji_click(self):
         """Obsługuje wybór emoji"""

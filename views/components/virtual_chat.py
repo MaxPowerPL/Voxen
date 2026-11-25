@@ -13,9 +13,14 @@ import bisect
 from dataclasses import dataclass, field
 import datetime
 from math import ceil
+import os
+import sys
+import webbrowser
+from pathlib import Path
 import time
 from typing import Callable, List, Optional
 import customtkinter as ctk
+from PIL import Image
 
 from utils import Colors, Fonts
 
@@ -31,6 +36,7 @@ class ChatMessageDTO:
     is_bot: bool = False
     avatar: str = "👤"
     calculated_height: int = 58
+    attachments: list = field(default_factory=list)
 
     def __post_init__(self):
         if not self.timestamp:
@@ -101,6 +107,77 @@ class PooledMessageWidget(ctk.CTkFrame):
         )
         self.body_label.pack(anchor="w", pady=(2, 2))
 
+        self.attachment_frame = ctk.CTkFrame(
+            self.content_frame,
+            fg_color="transparent"
+        )
+        self.attachment_frame.pack(anchor="w", fill="x", pady=(4, 2))
+        self._attachment_images = []
+
+    def _open_attachment(self, file_path: str) -> None:
+        path = Path(file_path)
+        if not path.exists():
+            return
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(path))
+            else:
+                webbrowser.open(path.as_uri())
+        except OSError:
+            webbrowser.open(path.as_uri())
+
+    def _render_attachments(self, attachments: list) -> None:
+        if not attachments and not self.attachment_frame.winfo_children():
+            return
+        for widget in self.attachment_frame.winfo_children():
+            widget.destroy()
+        self._attachment_images = []
+
+        for attachment in attachments or []:
+            original_name = attachment.get("original_name") or attachment.get("filename") or "Plik"
+            thumbnail_path = attachment.get("thumbnail_path")
+            file_path = attachment.get("file_path") or attachment.get("path") or ""
+            file_type = attachment.get("file_type", "")
+
+            if file_type == "image" and thumbnail_path and Path(thumbnail_path).exists():
+                try:
+                    pil_image = Image.open(thumbnail_path)
+                    pil_image.thumbnail((320, 320), Image.Resampling.LANCZOS)
+                    ctk_image = ctk.CTkImage(
+                        light_image=pil_image,
+                        dark_image=pil_image,
+                        size=(pil_image.width, pil_image.height)
+                    )
+                    self._attachment_images.append(ctk_image)
+                    image_button = ctk.CTkButton(
+                        self.attachment_frame,
+                        image=ctk_image,
+                        text="",
+                        fg_color="transparent",
+                        hover_color=Colors.BG_MAIN,
+                        command=lambda path=file_path: self._open_attachment(path)
+                    )
+                    image_button.pack(anchor="w", pady=(0, 4))
+                    continue
+                except (OSError, ValueError):
+                    pass
+
+            file_size = attachment.get("file_size") or attachment.get("size") or 0
+            if file_size < 1024 * 1024:
+                size_text = f"{file_size / 1024:.1f} KB"
+            else:
+                size_text = f"{file_size / (1024 * 1024):.1f} MB"
+            card = ctk.CTkButton(
+                self.attachment_frame,
+                text=f"📎 {original_name}\n{size_text}",
+                fg_color=Colors.BG_RIGHT,
+                hover_color=Colors.BG_MAIN,
+                text_color=Colors.TEXT_PRIMARY,
+                anchor="w",
+                command=lambda path=file_path: self._open_attachment(path)
+            )
+            card.pack(anchor="w", fill="x", pady=(0, 4))
+
     def bind_data(self, message: ChatMessageDTO, max_width: int = 600) -> None:
         """Szybkie przypisanie nowych danych bez alokacji widgetu"""
         self.avatar_label.configure(
@@ -123,6 +200,7 @@ class PooledMessageWidget(ctk.CTkFrame):
             text=message.content,
             wraplength=wrap_val
         )
+        self._render_attachments(message.attachments)
 
 
 class VirtualChatView(ctk.CTkFrame):
@@ -211,13 +289,23 @@ class VirtualChatView(ctk.CTkFrame):
 
         return self.BASE_PADDING + (lines * self.LINE_HEIGHT)
 
+    def _estimate_rendered_height(self, content: str, width: int, attachments: list | None = None) -> int:
+        height = self._estimate_message_height(content, width)
+        for attachment in attachments or []:
+            if attachment.get("file_type") == "image" and attachment.get("thumbnail_path"):
+                height += 220
+            else:
+                height += 64
+        return height
+
     def add_message(
         self,
         sender: str,
         content: str,
         is_own: bool = False,
         timestamp: Optional[str] = None,
-        is_bot: bool = False
+        is_bot: bool = False,
+        attachments: Optional[list] = None
     ) -> None:
         """
         Dodaje nową wiadomość do wirtualnej historii czatu.
@@ -226,7 +314,7 @@ class VirtualChatView(ctk.CTkFrame):
         if self.welcome_label and self.welcome_label.winfo_ismapped():
             self.welcome_label.place_forget()
 
-        h = self._estimate_message_height(content, self.viewport_width)
+        h = self._estimate_rendered_height(content, self.viewport_width, attachments)
         dto = ChatMessageDTO(
             id=str(len(self.messages)),
             sender=sender,
@@ -234,7 +322,8 @@ class VirtualChatView(ctk.CTkFrame):
             timestamp=timestamp or datetime.datetime.now().strftime("%H:%M"),
             is_own=is_own,
             is_bot=is_bot,
-            calculated_height=h
+            calculated_height=h,
+            attachments=attachments or []
         )
 
         self.messages.append(dto)
@@ -262,7 +351,8 @@ class VirtualChatView(ctk.CTkFrame):
 
         for item in messages_data:
             content = item.get("content", "")
-            h = self._estimate_message_height(content, self.viewport_width)
+            attachments = item.get("attachments", [])
+            h = self._estimate_rendered_height(content, self.viewport_width, attachments)
             dto = ChatMessageDTO(
                 id=str(item.get("id", len(self.messages))),
                 sender=item.get("sender", "User"),
@@ -270,7 +360,8 @@ class VirtualChatView(ctk.CTkFrame):
                 timestamp=item.get("timestamp", ""),
                 is_own=item.get("is_own", False),
                 is_bot=item.get("is_bot", False),
-                calculated_height=h
+                calculated_height=h,
+                attachments=attachments
             )
             self.messages.append(dto)
             self.offsets.append(self.offsets[-1] + h)
@@ -345,7 +436,7 @@ class VirtualChatView(ctk.CTkFrame):
         if width_changed and self.messages:
             self.offsets = [0]
             for msg in self.messages:
-                h = self._estimate_message_height(msg.content, self.viewport_width)
+                h = self._estimate_rendered_height(msg.content, self.viewport_width, msg.attachments)
                 msg.calculated_height = h
                 self.offsets.append(self.offsets[-1] + h)
             self.total_height = self.offsets[-1]

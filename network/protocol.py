@@ -98,14 +98,21 @@ class PacketFactory:
         return Packet(type=PacketType.HEARTBEAT_PONG)
 
     @staticmethod
-    def chat_message(sender: str, recipient_or_channel: str, content: str, is_dm: bool = True) -> Packet:
+    def chat_message(
+        sender: str,
+        recipient_or_channel: str,
+        content: str,
+        is_dm: bool = True,
+        attachments: Optional[list] = None
+    ) -> Packet:
         return Packet(
             type=PacketType.MESSAGE_SEND,
             payload={
                 "sender": sender,
                 "target": recipient_or_channel,
                 "content": content,
-                "is_dm": is_dm
+                "is_dm": is_dm,
+                "attachments": attachments or []
             }
         )
 

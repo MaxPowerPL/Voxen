@@ -1178,14 +1178,23 @@ class AppView(ctk.CTkFrame):
         """Czyści pole tekstowe wiadomości"""
         self.message_entry.delete(0, "end")
 
-    def add_message(self, sender: str, text: str, is_own: bool = False, timestamp: str = "", is_bot: bool = False):
+    def add_message(
+        self,
+        sender: str,
+        text: str,
+        is_own: bool = False,
+        timestamp: str = "",
+        is_bot: bool = False,
+        attachments: list | None = None
+    ):
         """Dodaje nową wiadomość do wirtualizowanego czatu (O(1))"""
         self.virtual_chat.add_message(
             sender=sender,
             content=text,
             is_own=is_own,
             timestamp=timestamp,
-            is_bot=is_bot or ("Bot" in sender)
+            is_bot=is_bot or ("Bot" in sender),
+            attachments=attachments
         )
 
     def load_message_history(self, messages_data: list):

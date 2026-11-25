@@ -136,6 +136,26 @@ class DatabaseManager:
                 );
             """)
 
+            # Chat file and image attachments
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    filename TEXT NOT NULL,
+                    original_name TEXT NOT NULL,
+                    file_type TEXT NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    mime_type TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    thumbnail_path TEXT,
+                    created_at TEXT NOT NULL
+                );
+            """)
+            cursor.execute("PRAGMA table_info(attachments);")
+            attachment_cols = [col[1] for col in cursor.fetchall()]
+            if "thumbnail_path" not in attachment_cols:
+                cursor.execute("ALTER TABLE attachments ADD COLUMN thumbnail_path TEXT;")
+
             # Indeksy
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);")
@@ -145,6 +165,7 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(target, is_read);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_server ON channels(server_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);")
 
             conn.commit()
 
@@ -529,6 +550,11 @@ class DatabaseManager:
                 row_dict = dict(row)
                 row_dict["is_own"] = (row_dict["sender"].lower() == user.lower())
                 row_dict["is_bot"] = ("bot" in row_dict["sender"].lower())
+                cursor.execute(
+                    "SELECT * FROM attachments WHERE message_id = ? ORDER BY id ASC",
+                    (row_dict["id"],)
+                )
+                row_dict["attachments"] = [dict(att) for att in cursor.fetchall()]
                 result.append(row_dict)
             return result
 
@@ -544,6 +570,86 @@ class DatabaseManager:
                 WHERE (sender = ? AND target = ?) OR (sender = ? AND target = ?) OR (target = ?)
             """, (user, conv, conv, user, conv))
             conn.commit()
+
+    # ==========================================
+    # ZAŁĄCZNIKI WIADOMOŚCI
+    # ==========================================
+
+    def save_attachment(
+        self,
+        message_id: int,
+        filename: str,
+        original_name: str,
+        file_type: str,
+        file_size: int,
+        mime_type: str,
+        file_path: str,
+        thumbnail_path: Optional[str] = None
+    ) -> int:
+        """Zapisuje metadane załącznika powiązanego z wiadomością."""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO attachments (
+                    message_id, filename, original_name, file_type, file_size,
+                    mime_type, file_path, thumbnail_path, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                message_id, filename, original_name, file_type, file_size,
+                mime_type, file_path, thumbnail_path, now_str
+            ))
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_attachment(self, attachment_id: int) -> Optional[Dict[str, Any]]:
+        """Pobiera jeden załącznik po jego ID."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM attachments WHERE id = ?", (attachment_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_attachments(self, message_id: int) -> list:
+        """Pobiera wszystkie załączniki dla wiadomości."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM attachments
+                WHERE message_id = ?
+                ORDER BY id ASC
+            """, (message_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_message_attachments(self, message_id: int) -> list:
+        """Alias dla get_attachments."""
+        return self.get_attachments(message_id)
+
+    def get_attachment_by_message(self, message_id: int) -> list:
+        """Alias dla get_attachments."""
+        return self.get_attachments(message_id)
+
+    def create_attachment(self, **attachment_data: Any) -> int:
+        """Alias dla save_attachment accepting a metadata dictionary."""
+        return self.save_attachment(
+            message_id=attachment_data["message_id"],
+            filename=attachment_data["filename"],
+            original_name=attachment_data["original_name"],
+            file_type=attachment_data["file_type"],
+            file_size=attachment_data["file_size"],
+            mime_type=attachment_data["mime_type"],
+            file_path=attachment_data["file_path"],
+            thumbnail_path=attachment_data.get("thumbnail_path")
+        )
+
+    def delete_attachment(self, attachment_id: int) -> bool:
+        """Usuwa metadane załącznika."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
+            conn.commit()
+            return cursor.rowcount > 0
 
     # ==========================================
     # SERWERY I KANAŁY TEKSTOWE (SQLITE)

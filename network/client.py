@@ -351,13 +351,21 @@ class NetworkClient:
         self._set_state(ConnectionState.AUTHENTICATING)
         self.send_packet(PacketFactory.auth(auth_key))
 
-    def send_message(self, target: str, content: str, sender: str = "User", is_dm: bool = True) -> bool:
+    def send_message(
+        self,
+        target: str,
+        content: str,
+        sender: str = "User",
+        is_dm: bool = True,
+        attachments: Optional[List[Dict[str, Any]]] = None
+    ) -> bool:
         """Wygodna metoda do wysyłania wiadomości tekstowej"""
         packet = PacketFactory.chat_message(
             sender=sender,
             recipient_or_channel=target,
             content=content,
-            is_dm=is_dm
+            is_dm=is_dm,
+            attachments=attachments
         )
         return self.send_packet(packet)
 

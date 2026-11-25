@@ -181,6 +181,8 @@ class MockWebSocketServer:
             sender = packet.payload.get("sender", "Anonim")
             target = packet.payload.get("target", "General")
             content = packet.payload.get("content", "")
+            is_dm = packet.payload.get("is_dm", True)
+            attachments = packet.payload.get("attachments", [])
 
             # Potwierdzenie ACK dla nadawcy
             ack = Packet(
@@ -197,7 +199,9 @@ class MockWebSocketServer:
                     "sender": sender,
                     "target": target,
                     "content": content,
-                    "timestamp": packet.timestamp
+                    "timestamp": packet.timestamp,
+                    "is_dm": is_dm,
+                    "attachments": attachments
                 }
             )
             for client in list(self.clients):
