@@ -200,6 +200,48 @@ class ServerModel:
         """Gets aggregate server analytics."""
         return self.db.get_server_analytics(server_id)
 
+    def create_webhook(
+        self,
+        server_id: int,
+        name: str,
+        url: str,
+        secret: str = "",
+        events: str = "*"
+    ) -> tuple:
+        """Creates a server webhook configuration."""
+        return self.db.create_server_webhook(
+            server_id,
+            name,
+            url,
+            secret,
+            events
+        )
+
+    def get_webhooks(self, server_id: int) -> list:
+        """Gets server webhook configurations."""
+        return self.db.get_server_webhooks(server_id)
+
+    def set_webhook_active(self, webhook_id: int, active: bool) -> bool:
+        """Enables or disables a webhook."""
+        return self.db.set_server_webhook_active(webhook_id, active)
+
+    def delete_webhook(self, webhook_id: int) -> bool:
+        """Deletes a webhook."""
+        return self.db.delete_server_webhook(webhook_id)
+
+    def dispatch_webhook(
+        self,
+        server_id: int,
+        event_type: str,
+        payload: Dict[str, Any]
+    ) -> list:
+        """Queues a webhook event."""
+        return self.db.dispatch_server_webhook(server_id, event_type, payload)
+
+    def get_webhook_deliveries(self, server_id: int, limit: int = 100) -> list:
+        """Gets recent webhook deliveries."""
+        return self.db.get_webhook_deliveries(server_id, limit)
+
     def set_channel_permission(
         self,
         channel_id: int,

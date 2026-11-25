@@ -13,6 +13,9 @@ import json
 import logging
 import sqlite3
 import threading
+import hmac
+import hashlib
+import json
 from typing import Any, Dict, Optional, Tuple
 
 from security.crypto import PasswordHasher
@@ -213,6 +216,29 @@ class DatabaseManager:
                     created_at TEXT NOT NULL
                 );
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS server_webhooks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    secret TEXT NOT NULL DEFAULT '',
+                    events TEXT NOT NULL DEFAULT '*',
+                    is_active INTEGER DEFAULT 1,
+                    created_at TEXT NOT NULL
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    webhook_id INTEGER NOT NULL REFERENCES server_webhooks(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    signature TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    created_at TEXT NOT NULL
+                );
+            """)
 
             # Chat file and image attachments
             cursor.execute("""
@@ -264,6 +290,8 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_user ON server_members(user_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_member_activity_server ON member_activity_logs(server_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_member_activity_created ON member_activity_logs(created_at);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_webhooks_server ON server_webhooks(server_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions(message_id);")
 
             conn.commit()
@@ -1071,6 +1099,157 @@ class DatabaseManager:
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT id, name, icon, owner_id, created_at FROM servers ORDER BY id ASC")
+            return [dict(row) for row in cursor.fetchall()]
+
+    def create_server_webhook(
+        self,
+        server_id: int,
+        name: str,
+        url: str,
+        secret: str = "",
+        events: str = "*"
+    ) -> tuple:
+        """Creates a server webhook configuration."""
+        name = name.strip()
+        url = url.strip()
+        if not name:
+            return False, "Nazwa webhooka nie może być pusta."
+        if not url.startswith(("http://", "https://")):
+            return False, "Niepoprawny adres URL webhooka."
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM servers WHERE id = ?", (server_id,))
+            if not cursor.fetchone():
+                return False, "Nie znaleziono serwera."
+            cursor.execute("""
+                INSERT INTO server_webhooks (
+                    server_id, name, url, secret, events, is_active, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, 1, ?)
+            """, (server_id, name, url, secret, events.strip() or "*", now_str))
+            conn.commit()
+            return True, {
+                "id": cursor.lastrowid,
+                "server_id": server_id,
+                "name": name,
+                "url": url,
+                "events": events.strip() or "*",
+                "is_active": True
+            }
+
+    def get_server_webhooks(self, server_id: int) -> list:
+        """Returns webhook configurations for a server."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, server_id, name, url, secret, events, is_active, created_at
+                FROM server_webhooks
+                WHERE server_id = ?
+                ORDER BY id ASC
+            """, (server_id,))
+            result = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                item["is_active"] = bool(item["is_active"])
+                result.append(item)
+            return result
+
+    def set_server_webhook_active(self, webhook_id: int, active: bool) -> bool:
+        """Enables or disables a server webhook."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE server_webhooks
+                SET is_active = ?
+                WHERE id = ?
+            """, (1 if active else 0, webhook_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def delete_server_webhook(self, webhook_id: int) -> bool:
+        """Deletes a server webhook and queued deliveries."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM server_webhooks WHERE id = ?", (webhook_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def dispatch_server_webhook(
+        self,
+        server_id: int,
+        event_type: str,
+        payload: Dict[str, Any]
+    ) -> list:
+        """Queues matching webhook deliveries with HMAC-SHA256 signatures."""
+        event_type = event_type.strip()
+        event_payload = json.dumps(
+            {
+                "event": event_type,
+                "server_id": server_id,
+                "payload": payload
+            },
+            ensure_ascii=False,
+            sort_keys=True
+        )
+        queued = []
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, secret, events
+                FROM server_webhooks
+                WHERE server_id = ? AND is_active = 1
+            """, (server_id,))
+            webhooks = cursor.fetchall()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for webhook in webhooks:
+                subscribed = webhook["events"].split(",")
+                subscribed = [value.strip() for value in subscribed]
+                if "*" not in subscribed and event_type not in subscribed:
+                    continue
+                signature = hmac.new(
+                    webhook["secret"].encode("utf-8"),
+                    event_payload.encode("utf-8"),
+                    hashlib.sha256
+                ).hexdigest()
+                cursor.execute("""
+                    INSERT INTO webhook_deliveries (
+                        webhook_id, event_type, payload, signature, status, created_at
+                    )
+                    VALUES (?, ?, ?, ?, 'queued', ?)
+                """, (
+                    webhook["id"],
+                    event_type,
+                    event_payload,
+                    signature,
+                    now_str
+                ))
+                queued.append({
+                    "webhook_id": webhook["id"],
+                    "event_type": event_type,
+                    "signature": signature,
+                    "status": "queued"
+                })
+            conn.commit()
+            return queued
+
+    def get_webhook_deliveries(
+        self,
+        server_id: int,
+        limit: int = 100
+    ) -> list:
+        """Returns recent queued webhook deliveries for a server."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT d.id, d.webhook_id, d.event_type, d.payload, d.signature,
+                       d.status, d.created_at, w.name AS webhook_name
+                FROM webhook_deliveries d
+                JOIN server_webhooks w ON w.id = d.webhook_id
+                WHERE w.server_id = ?
+                ORDER BY d.id DESC
+                LIMIT ?
+            """, (server_id, max(1, int(limit))))
             return [dict(row) for row in cursor.fetchall()]
 
     def get_server_analytics(self, server_id: int) -> Dict[str, Any]:

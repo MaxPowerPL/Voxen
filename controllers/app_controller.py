@@ -486,6 +486,11 @@ class AppController:
         )
         if success:
             print(f"Utworzono serwer: {name}")
+            self.server_model.dispatch_webhook(
+                result["id"],
+                "server.created",
+                {"name": name, "icon": icon}
+            )
             self.load_servers()
             self.handle_server_click(result["id"], result["name"])
         else:
@@ -725,6 +730,17 @@ class AppController:
             content=message,
             is_dm=is_dm
         )
+        if self.current_server_id:
+            self.server_model.dispatch_webhook(
+                self.current_server_id,
+                "message.created",
+                {
+                    "message_id": message_id,
+                    "sender": self.sender_name,
+                    "target": target,
+                    "content": message
+                }
+            )
 
         # 3. Wyświetl natychmiast własną wiadomość w wirtualnym czacie
         reactions = self.db.get_message_reactions(message_id) if message_id and self.db else []
