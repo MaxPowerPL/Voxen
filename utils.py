@@ -91,6 +91,6 @@ class Dimensions:
 class Config:
     """Ogólna konfiguracja aplikacji"""
 
-    APP_TITLE = "Voxen v0.1.7 - alpha"
+    APP_TITLE = "Voxen v0.1.8 - alpha"
     APPEARANCE_MODE = "dark"      # "dark", "light", "system"
     COLOR_THEME = "dark-blue"          # "blue", "dark-blue", "green"

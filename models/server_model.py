@@ -34,6 +34,22 @@ class ServerModel:
         """Zwraca listę kanałów dla wskazanego serwera"""
         return self.db.get_channels(server_id=server_id)
 
+    def toggle_channel_bookmark(
+        self,
+        channel_id: int,
+        user_name: str
+    ) -> tuple:
+        """Toggles a user's channel bookmark."""
+        return self.db.toggle_channel_bookmark(channel_id, user_name)
+
+    def is_channel_bookmarked(self, channel_id: int, user_name: str) -> bool:
+        """Checks channel bookmark status."""
+        return self.db.is_channel_bookmarked(channel_id, user_name)
+
+    def get_channel_bookmarks(self, user_name: str) -> list:
+        """Gets a user's bookmarked channels."""
+        return self.db.get_channel_bookmarks(user_name)
+
     def create_category(
         self,
         server_id: int,

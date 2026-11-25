@@ -1044,6 +1044,28 @@ class AppController:
             channels
         )
 
+    def handle_toggle_channel_bookmark(self, channel_id: int) -> None:
+        """Toggles a channel bookmark for the current user."""
+        success, result = self.server_model.toggle_channel_bookmark(
+            channel_id,
+            self.sender_name
+        )
+        if success and hasattr(self.view, "show_in_app_toast"):
+            if result["bookmarked"]:
+                self.view.show_in_app_toast("Zakładki", "Kanał dodano do zakładek.")
+            else:
+                self.view.show_in_app_toast("Zakładki", "Kanał usunięto z zakładek.")
+        if hasattr(self.view, "refresh_channel_bookmarks"):
+            self.view.refresh_channel_bookmarks(
+                self.server_model.get_channel_bookmarks(self.sender_name)
+            )
+
+    def handle_show_channel_bookmarks(self) -> None:
+        """Shows bookmarked channels for the current user."""
+        bookmarks = self.server_model.get_channel_bookmarks(self.sender_name)
+        if hasattr(self.view, "show_channel_bookmarks_modal"):
+            self.view.show_channel_bookmarks_modal(bookmarks)
+
     def handle_history_search(self, query: str = "", sender: str = "", timestamp: str = ""):
         """Filters the active conversation/channel history."""
         query = query.strip()

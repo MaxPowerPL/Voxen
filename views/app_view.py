@@ -415,6 +415,15 @@ class AppView(ctk.CTkFrame):
             command=lambda _: self._on_channel_search()
         )
         self.channel_sort_combo.pack(side="right")
+        ctk.CTkButton(
+            channel_search_frame,
+            text="⭐",
+            width=32,
+            height=30,
+            fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
+            command=self._on_channel_bookmarks_click
+        ).pack(side="right", padx=(0, 4))
 
         self.channels_scroll = ctk.CTkScrollableFrame(
             self.server_channels_panel,
@@ -579,6 +588,11 @@ class AppView(ctk.CTkFrame):
         query = self.channel_search_entry.get()
         sort_by = self.channel_sort_var.get()
         self.controller.handle_channel_search(query, sort_by)
+
+    def _on_channel_bookmarks_click(self):
+        """Delegates bookmark panel display to the controller."""
+        if self.controller:
+            self.controller.handle_show_channel_bookmarks()
 
     def _create_user_panel(self):
         """Tworzy panel profilu użytkownika na dole kanałów z możliwością zmiany statusu"""
@@ -1040,6 +1054,11 @@ class AppView(ctk.CTkFrame):
         if self.controller:
             self.controller.handle_show_pinned_messages()
 
+    def _on_toggle_channel_bookmark(self, channel_id: int):
+        """Toggles a channel bookmark."""
+        if self.controller:
+            self.controller.handle_toggle_channel_bookmark(channel_id)
+
     def _on_emoji_click(self):
         """Deleguje do controllera"""
         if self.controller:
@@ -1173,6 +1192,17 @@ class AppView(ctk.CTkFrame):
                 command=lambda cid=server_id, cname=ch_name, ctop=ch_topic, ctype=ch_type: self._on_channel_click(cid, cname, ctop, ctype)
             )
             btn.pack(side="left", fill="both", expand=True)
+
+            bookmark_btn = ctk.CTkButton(
+                ch_row,
+                text="☆",
+                width=30,
+                height=30,
+                fg_color="transparent",
+                hover_color=Colors.BG_MAIN,
+                command=lambda cid=ch.get("id"): self._on_toggle_channel_bookmark(cid)
+            )
+            bookmark_btn.pack(side="right", padx=(2, 4))
 
             badge_frame = ctk.CTkFrame(
                 ch_row,
@@ -1754,6 +1784,72 @@ class AppView(ctk.CTkFrame):
                 font=("Segoe UI", 17),
                 command=lambda e=emoji: _choose(e)
             ).grid(row=index // 6, column=index % 6, padx=3, pady=3)
+
+    def show_channel_bookmarks_modal(self, bookmarks: list) -> None:
+        """Shows and allows quick access to bookmarked channels."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Zakładki kanałów")
+        dialog.geometry("460x380")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text="⭐ Zakładki kanałów",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(16, 10))
+
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=280)
+        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        if not bookmarks:
+            ctk.CTkLabel(
+                scroll,
+                text="Brak zapisanych kanałów.",
+                text_color=Colors.TEXT_SECONDARY
+            ).pack(pady=20)
+
+        for bookmark in bookmarks:
+            server_name = bookmark["server_name"]
+            channel_name = bookmark["channel_name"]
+            channel_type = bookmark["channel_type"]
+            icon = "🔊" if channel_type == "voice" else "#"
+            row = ctk.CTkFrame(scroll, fg_color=Colors.BG_RIGHT, corner_radius=8)
+            row.pack(fill="x", pady=3)
+
+            def open_bookmark(
+                sid=bookmark["server_id"],
+                sname=server_name,
+                cname=channel_name,
+                ctype=channel_type
+            ):
+                dialog.destroy()
+                if self.controller:
+                    self.controller.handle_server_click(sid, sname)
+                    self.controller.handle_channel_click(
+                        sid,
+                        cname,
+                        "",
+                        ctype
+                    )
+
+            ctk.CTkButton(
+                row,
+                text=f"⭐ {icon}  {server_name} / {channel_name}",
+                anchor="w",
+                fg_color="transparent",
+                hover_color=Colors.BG_MAIN,
+                command=open_bookmark
+            ).pack(side="left", fill="x", expand=True, padx=8, pady=8)
+
+        ctk.CTkButton(
+            dialog,
+            text="Zamknij",
+            fg_color="transparent",
+            width=100,
+            command=dialog.destroy
+        ).pack(pady=(0, 12))
 
     def show_thread_modal(self, root_message_id: int, replies: list) -> None:
         """Shows direct threaded replies for a message."""

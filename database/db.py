@@ -241,6 +241,15 @@ class DatabaseManager:
                     created_at TEXT NOT NULL
                 );
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS channel_bookmarks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                    user_name TEXT NOT NULL COLLATE NOCASE,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(channel_id, user_name)
+                );
+            """)
 
             # Chat file and image attachments
             cursor.execute("""
@@ -294,6 +303,7 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_member_activity_created ON member_activity_logs(created_at);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_webhooks_server ON server_webhooks(server_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook ON webhook_deliveries(webhook_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_channel_bookmarks_user ON channel_bookmarks(user_name);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions(message_id);")
 
             conn.commit()
@@ -1435,6 +1445,83 @@ class DatabaseManager:
                     ELSE 4
                 END, u.username ASC
             """, (server_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def toggle_channel_bookmark(
+        self,
+        channel_id: int,
+        user_name: str
+    ) -> tuple:
+        """Adds or removes a channel bookmark for a user."""
+        user_name = user_name.strip()
+        if not user_name:
+            return False, "Nazwa użytkownika jest wymagana."
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id FROM channels WHERE id = ?
+            """, (channel_id,))
+            if not cursor.fetchone():
+                return False, "Nie znaleziono kanału."
+            cursor.execute("""
+                SELECT id FROM channel_bookmarks
+                WHERE channel_id = ? AND user_name = ?
+            """, (channel_id, user_name))
+            existing = cursor.fetchone()
+            if existing:
+                cursor.execute("""
+                    DELETE FROM channel_bookmarks WHERE id = ?
+                """, (existing["id"],))
+                conn.commit()
+                return True, {
+                    "channel_id": channel_id,
+                    "user_name": user_name,
+                    "bookmarked": False
+                }
+            cursor.execute("""
+                INSERT INTO channel_bookmarks (
+                    channel_id, user_name, created_at
+                )
+                VALUES (?, ?, ?)
+            """, (channel_id, user_name, now_str))
+            conn.commit()
+            return True, {
+                "channel_id": channel_id,
+                "user_name": user_name,
+                "bookmarked": True
+            }
+
+    def is_channel_bookmarked(self, channel_id: int, user_name: str) -> bool:
+        """Checks whether a channel is bookmarked by a user."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id FROM channel_bookmarks
+                WHERE channel_id = ? AND user_name = ?
+            """, (channel_id, user_name.strip()))
+            return cursor.fetchone() is not None
+
+    def get_channel_bookmarks(self, user_name: str) -> list:
+        """Returns bookmarked channels for a user."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    cb.id AS bookmark_id,
+                    cb.created_at AS bookmarked_at,
+                    c.id AS channel_id,
+                    c.name AS channel_name,
+                    c.topic,
+                    c.channel_type,
+                    c.server_id,
+                    s.name AS server_name
+                FROM channel_bookmarks cb
+                JOIN channels c ON c.id = cb.channel_id
+                JOIN servers s ON s.id = c.server_id
+                WHERE cb.user_name = ?
+                ORDER BY cb.created_at DESC, cb.id DESC
+            """, (user_name.strip(),))
             return [dict(row) for row in cursor.fetchall()]
 
     def get_available_server_users(self, server_id: int) -> list:
