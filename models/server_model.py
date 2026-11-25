@@ -34,6 +34,39 @@ class ServerModel:
         """Zwraca listę kanałów dla wskazanego serwera"""
         return self.db.get_channels(server_id=server_id)
 
+    def create_category(
+        self,
+        server_id: int,
+        name: str,
+        position: int = 0
+    ) -> tuple:
+        """Creates a server channel category."""
+        return self.db.create_channel_category(server_id, name, position)
+
+    def get_categories(self, server_id: int) -> list:
+        """Gets server channel categories."""
+        return self.db.get_channel_categories(server_id)
+
+    def assign_channel_category(
+        self,
+        channel_id: int,
+        category_id: Optional[int]
+    ) -> bool:
+        """Assigns or removes a channel category."""
+        return self.db.assign_channel_category(channel_id, category_id)
+
+    def set_category_collapsed(
+        self,
+        category_id: int,
+        collapsed: bool
+    ) -> bool:
+        """Updates category collapsed state."""
+        return self.db.set_channel_category_collapsed(category_id, collapsed)
+
+    def get_grouped_channels(self, server_id: int) -> dict:
+        """Gets channels grouped into categories."""
+        return self.db.get_grouped_channels(server_id)
+
     def search_channels(
         self,
         server_id: int,

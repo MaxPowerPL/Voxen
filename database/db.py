@@ -145,6 +145,21 @@ class DatabaseManager:
                 );
             """)
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS channel_categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    position INTEGER DEFAULT 0,
+                    collapsed INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(server_id, name)
+                );
+            """)
+            cursor.execute("PRAGMA table_info(channels);")
+            channel_cols = [col[1] for col in cursor.fetchall()]
+            if "category_id" not in channel_cols:
+                cursor.execute("ALTER TABLE channels ADD COLUMN category_id INTEGER REFERENCES channel_categories(id) ON DELETE SET NULL;")
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS voice_participants (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
@@ -240,6 +255,8 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(target, is_read);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pinned_messages_conversation ON pinned_messages(conversation);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_server ON channels(server_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_category ON channels(category_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_channel_categories_server ON channel_categories(server_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_voice_participants_channel ON voice_participants(channel_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_channel_permissions_channel ON channel_permissions(channel_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);")
@@ -1368,12 +1385,110 @@ class DatabaseManager:
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, server_id, name, topic, channel_type, position
+                SELECT id, server_id, name, topic, channel_type, position, category_id
                 FROM channels
                 WHERE server_id = ?
                 ORDER BY position ASC, id ASC
             """, (server_id,))
             return [dict(row) for row in cursor.fetchall()]
+
+    def create_channel_category(
+        self,
+        server_id: int,
+        name: str,
+        position: int = 0
+    ) -> tuple:
+        """Creates a named channel category."""
+        name = name.strip()
+        if not name:
+            return False, "Nazwa kategorii nie może być pusta."
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with self._lock, self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO channel_categories (
+                        server_id, name, position, collapsed, created_at
+                    )
+                    VALUES (?, ?, ?, 0, ?)
+                """, (server_id, name, max(0, int(position)), now_str))
+                conn.commit()
+                return True, {
+                    "id": cursor.lastrowid,
+                    "server_id": server_id,
+                    "name": name,
+                    "position": position,
+                    "collapsed": False
+                }
+        except sqlite3.IntegrityError:
+            return False, "Taka kategoria już istnieje na serwerze."
+
+    def get_channel_categories(self, server_id: int) -> list:
+        """Returns channel categories ordered by position."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, server_id, name, position, collapsed, created_at
+                FROM channel_categories
+                WHERE server_id = ?
+                ORDER BY position ASC, name COLLATE NOCASE ASC
+            """, (server_id,))
+            result = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                item["collapsed"] = bool(item["collapsed"])
+                result.append(item)
+            return result
+
+    def assign_channel_category(
+        self,
+        channel_id: int,
+        category_id: Optional[int]
+    ) -> bool:
+        """Assigns or removes a channel category."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE channels
+                SET category_id = ?
+                WHERE id = ?
+            """, (category_id, channel_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def set_channel_category_collapsed(
+        self,
+        category_id: int,
+        collapsed: bool
+    ) -> bool:
+        """Stores collapsed state for a channel category."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE channel_categories
+                SET collapsed = ?
+                WHERE id = ?
+            """, (1 if collapsed else 0, category_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_grouped_channels(self, server_id: int) -> dict:
+        """Groups channels under categories and uncategorized."""
+        categories = self.get_channel_categories(server_id)
+        channels = self.get_channels(server_id)
+        grouped = {"uncategorized": []}
+        for category in categories:
+            grouped[str(category["id"])] = {
+                "category": category,
+                "channels": []
+            }
+        for channel in channels:
+            category_id = channel.get("category_id")
+            if category_id is not None and str(category_id) in grouped:
+                grouped[str(category_id)]["channels"].append(channel)
+            else:
+                grouped["uncategorized"].append(channel)
+        return grouped
 
     def search_and_sort_channels(
         self,

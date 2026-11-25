@@ -1089,7 +1089,21 @@ class AppView(ctk.CTkFrame):
 
         self.channel_buttons = {}
         self.channel_badges = {}
-        for ch in channels_list:
+        grouped = {}
+        if getattr(self.controller, "server_model", None):
+            try:
+                grouped = self.controller.server_model.get_grouped_channels(server_id)
+            except Exception:
+                grouped = {}
+
+        categories = []
+        if grouped:
+            for key, value in grouped.items():
+                if key == "uncategorized":
+                    continue
+                categories.append(value)
+
+        def render_channel(ch):
             ch_name = ch["name"]
             ch_topic = ch.get("topic", "")
             ch_type = ch.get("channel_type", "text")
@@ -1129,6 +1143,49 @@ class AppView(ctk.CTkFrame):
 
             self.channel_buttons[ch_name] = btn
             self.channel_badges[ch_name] = (badge_frame, badge_lbl)
+
+        for category_value in categories:
+            category = category_value["category"]
+            category_channels = [
+                ch for ch in category_value["channels"]
+                if ch["id"] in {item["id"] for item in channels_list}
+            ]
+            if not category_channels:
+                continue
+            collapsed = bool(category["collapsed"])
+            category_row = ctk.CTkFrame(
+                self.channels_scroll,
+                fg_color="transparent",
+                height=28
+            )
+            category_row.pack(fill="x", pady=(6, 2))
+
+            def toggle_category(cat_id=category["id"], cat=category):
+                next_state = not bool(cat["collapsed"])
+                cat["collapsed"] = next_state
+                self.controller.server_model.set_category_collapsed(cat_id, next_state)
+                self.show_server_channels(server_id, server_name, channels_list)
+
+            ctk.CTkButton(
+                category_row,
+                text=f"{'▶' if collapsed else '▼'}  {category['name']}",
+                anchor="w",
+                height=28,
+                fg_color="transparent",
+                hover_color=Colors.BG_MAIN,
+                text_color=Colors.TEXT_SECONDARY,
+                command=toggle_category
+            ).pack(fill="x")
+            if not collapsed:
+                for ch in category_channels:
+                    render_channel(ch)
+
+        uncategorized = [
+            ch for ch in channels_list
+            if ch.get("category_id") is None
+        ]
+        for ch in uncategorized:
+            render_channel(ch)
 
     def update_dm_badge(self, name: str, count: int):
         """Aktualizuje odznakę nieprzeczytanych wiadomości dla rozmówcy DM"""
