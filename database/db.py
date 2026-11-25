@@ -1280,6 +1280,33 @@ class DatabaseManager:
             """, (server_id,))
             return [dict(row) for row in cursor.fetchall()]
 
+    def search_and_sort_channels(
+        self,
+        server_id: int,
+        query: str = "",
+        sort_by: str = "position"
+    ) -> list:
+        """Filters and sorts channels by name/topic or configured position."""
+        channels = self.get_channels(server_id)
+        search_query = query.strip().lower()
+        if search_query:
+            channels = [
+                channel for channel in channels
+                if search_query in channel["name"].lower()
+                or search_query in (channel.get("topic") or "").lower()
+            ]
+
+        sort_by = sort_by.strip().lower()
+        if sort_by == "name":
+            channels.sort(key=lambda channel: channel["name"].lower())
+        elif sort_by == "name_desc":
+            channels.sort(key=lambda channel: channel["name"].lower(), reverse=True)
+        elif sort_by == "topic":
+            channels.sort(key=lambda channel: (channel.get("topic") or "").lower())
+        else:
+            channels.sort(key=lambda channel: (channel.get("position", 0), channel["id"]))
+        return channels
+
     def set_channel_permission(
         self,
         channel_id: int,

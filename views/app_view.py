@@ -380,6 +380,37 @@ class AppView(ctk.CTkFrame):
         add_channel_btn.pack(side="right")
         self.add_channel_button = add_channel_btn
 
+        channel_search_frame = ctk.CTkFrame(
+            self.server_channels_panel,
+            fg_color="transparent",
+            height=40
+        )
+        channel_search_frame.pack(fill="x", padx=12, pady=(2, 4))
+        channel_search_frame.pack_propagate(False)
+
+        self.channel_search_entry = ctk.CTkEntry(
+            channel_search_frame,
+            placeholder_text="🔍 Szukaj kanału",
+            height=30,
+            fg_color=Colors.BG_MAIN,
+            border_width=0,
+            font=Fonts.INPUT
+        )
+        self.channel_search_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        self.channel_search_entry.bind("<KeyRelease>", self._on_channel_search)
+
+        self.channel_sort_var = ctk.StringVar(value="position")
+        self.channel_sort_combo = ctk.CTkComboBox(
+            channel_search_frame,
+            values=["position", "name", "name_desc", "topic"],
+            variable=self.channel_sort_var,
+            state="readonly",
+            width=110,
+            height=30,
+            command=lambda _: self._on_channel_search()
+        )
+        self.channel_sort_combo.pack(side="right")
+
         self.channels_scroll = ctk.CTkScrollableFrame(
             self.server_channels_panel,
             fg_color="transparent",
@@ -535,6 +566,14 @@ class AppView(ctk.CTkFrame):
         sender = self.history_sender_entry.get()
         timestamp = self.history_timestamp_entry.get()
         self.controller.handle_history_search(query, sender=sender, timestamp=timestamp)
+
+    def _on_channel_search(self, event=None):
+        """Delegates channel filtering and sorting to the controller."""
+        if not self.controller or not hasattr(self, "channel_search_entry"):
+            return
+        query = self.channel_search_entry.get()
+        sort_by = self.channel_sort_var.get()
+        self.controller.handle_channel_search(query, sort_by)
 
     def _create_user_panel(self):
         """Tworzy panel profilu użytkownika na dole kanałów z możliwością zmiany statusu"""

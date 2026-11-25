@@ -859,6 +859,31 @@ class AppController:
                 if query:
                     widget.pack_forget()
 
+    def handle_channel_search(self, query: str = "", sort_by: str = "position") -> None:
+        """Filters and sorts channels for the active server."""
+        if not self.current_server_id:
+            return
+        channels = self.server_model.search_channels(
+            self.current_server_id,
+            query=query,
+            sort_by=sort_by
+        )
+        uid = self.current_user.get("id", 1)
+        role = self.server_model.get_member_role(self.current_server_id, uid)
+        channels = [
+            channel for channel in channels
+            if self.server_model.can_access_channel(
+                channel["id"],
+                role,
+                "view"
+            )
+        ]
+        self.view.show_server_channels(
+            self.current_server_id,
+            self.current_server,
+            channels
+        )
+
     def handle_history_search(self, query: str = "", sender: str = "", timestamp: str = ""):
         """Filters the active conversation/channel history."""
         query = query.strip()

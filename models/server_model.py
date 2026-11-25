@@ -34,6 +34,19 @@ class ServerModel:
         """Zwraca listę kanałów dla wskazanego serwera"""
         return self.db.get_channels(server_id=server_id)
 
+    def search_channels(
+        self,
+        server_id: int,
+        query: str = "",
+        sort_by: str = "position"
+    ) -> List[Dict[str, Any]]:
+        """Filters and sorts server channels."""
+        return self.db.search_and_sort_channels(
+            server_id=server_id,
+            query=query,
+            sort_by=sort_by
+        )
+
     def create_channel(
         self,
         server_id: int,
