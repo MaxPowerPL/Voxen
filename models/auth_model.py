@@ -1,129 +1,113 @@
 """
-MODEL - Zarządzanie danymi użytkowników i logika biznesowa autentykacji
+MODEL - Zarządzanie danymi użytkowników, bezpieczeństwem i sesjami (SQLite + scrypt)
 """
-import json
-from datetime import datetime
-from pathlib import Path
+
+from typing import Any, Dict, Optional, Tuple
+from database.db import DatabaseManager
+from security.crypto import PasswordHasher
+from security.session import SessionManager
 
 
 class AuthModel:
-    """Model zarządzający danymi użytkowników (Model w MVC)"""
+    """Model zarządzający autentykacją i bezpieczeństwem kont (Model w MVC)"""
 
-    def __init__(self, json_file="users.json"):
+    def __init__(self, db_path: str = "voxen.db"):
         """
-        Inicjalizacja modelu autentykacji
+        Inicjalizacja modelu opartego na SQLite i scrypt
 
         Args:
-            json_file: Ścieżka do pliku JSON z użytkownikami
+            db_path: Ścieżka do pliku bazy SQLite
         """
-        self.json_file = Path(json_file)
-        self._ensure_file_exists()
+        self.db = DatabaseManager(db_path)
+        self.session_manager = SessionManager()
 
-    def _ensure_file_exists(self):
-        """Sprawdza czy plik JSON istnieje, jeśli nie - tworzy domyślny"""
-        if not self.json_file.exists():
-            default_data = {
-                "users": [
-                    {
-                        "email": "admin@admin.pl",
-                        "password": "admin123",
-                        "security": 5,
-                        "last_login": None
-                    }
-                ]
-            }
-            self._save_data(default_data)
-
-    def _load_data(self):
+    def validate_credentials(self, email: str, password: str) -> Tuple[bool, str | Dict[str, Any]]:
         """
-        Wczytuje dane z pliku JSON
-
-        Returns:
-            dict: Słownik z danymi użytkowników
-        """
-        try:
-            with open(self.json_file, 'r', encoding='utf-8') as file:
-                return json.load(file)
-        except (json.JSONDecodeError, FileNotFoundError) as e:
-            print(f"Błąd wczytywania pliku JSON: {e}")
-            return {"users": []}
-
-    def _save_data(self, data):
-        """
-        Zapisuje dane do pliku JSON
-
-        Args:
-            data: Słownik z danymi do zapisania
-        """
-        try:
-            with open(self.json_file, 'w', encoding='utf-8') as file:
-                json.dump(data, file, indent=4, ensure_ascii=False)
-        except Exception as e:
-            print(f"Błąd zapisywania do pliku JSON: {e}")
-
-    def validate_credentials(self, email, password):
-        """
-        Sprawdza poprawność danych logowania
+        Sprawdza poprawność danych logowania i tworzy trwałą sesję przy sukcesie.
 
         Args:
             email: Email użytkownika
             password: Hasło użytkownika
 
         Returns:
-            tuple: (bool, dict/str) - (sukces, dane_użytkownika lub komunikat_błędu)
+            tuple: (sukces, dane_użytkownika lub komunikat_błędu)
         """
-        # Walidacja podstawowa
+        email = email.strip() if email else ""
+
         if not email or not password:
             return False, "Wypełnij wszystkie pola!"
 
         if "@" not in email:
             return False, "Podaj poprawny adres email!"
 
-        # Wczytaj dane
-        data = self._load_data()
+        user = self.db.get_user_by_email(email)
+        if not user:
+            return False, "Użytkownik nie istnieje!"
 
-        # Szukaj użytkownika
-        for user in data.get("users", []):
-            if user["email"] == email:
-                if user["password"] == password:
-                    return True, user
-                else:
-                    return False, "Nieprawidłowe hasło!"
+        # Weryfikacja hasła z wykorzystaniem stałoczasowego scrypt
+        is_valid = PasswordHasher.verify_password(password, user["password_hash"])
+        if not is_valid:
+            return False, "Nieprawidłowe hasło!"
 
-        return False, "Użytkownik nie istnieje!"
+        # Utwórz token sesji i zapisz lokalnie
+        token = self.db.create_session(user["id"])
+        self.session_manager.save_local_token(token, user["email"])
 
-    def update_last_login(self, email):
+        # Zwracamy bezpieczny słownik bez hasha hasła
+        user_data = {
+            "id": user["id"],
+            "email": user["email"],
+            "username": user["username"],
+            "security": user["security"],
+            "last_login": user["last_login"]
+        }
+        return True, user_data
+
+    def check_saved_session(self) -> Optional[Dict[str, Any]]:
         """
-        Aktualizuje datę ostatniego logowania dla użytkownika
-
-        Args:
-            email: Email użytkownika
-        """
-        data = self._load_data()
-
-        # Znajdź użytkownika i zaktualizuj datę
-        for user in data.get("users", []):
-            if user["email"] == email:
-                user["last_login"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                break
-
-        # Zapisz zaktualizowane dane
-        self._save_data(data)
-
-    def get_user_info(self, email):
-        """
-        Pobiera informacje o użytkowniku
-
-        Args:
-            email: Email użytkownika
+        Sprawdza czy na dysku istnieje aktywna, niewygasła sesja (Auto-Login).
 
         Returns:
-            dict: Dane użytkownika lub None
+            dict z danymi użytkownika lub None
         """
-        data = self._load_data()
+        token = self.session_manager.get_local_token()
+        if not token:
+            return None
 
-        for user in data.get("users", []):
-            if user["email"] == email:
-                return user
+        user = self.db.validate_session(token)
+        if user:
+            self.db.update_last_login(user["email"])
+        return user
 
+    def logout(self) -> None:
+        """Wylogowuje użytkownika, unieważnia token w bazie i usuwa plik sesji"""
+        token = self.session_manager.get_local_token()
+        if token:
+            self.db.revoke_session(token)
+        self.session_manager.clear_local_session()
+
+    def register_user(
+        self,
+        email: str,
+        password: str,
+        username: Optional[str] = None
+    ) -> Tuple[bool, str | Dict[str, Any]]:
+        """Rejestruje nowego użytkownika w bazie SQLite"""
+        return self.db.create_user(email, password, username=username)
+
+    def update_last_login(self, email: str) -> None:
+        """Aktualizuje datę ostatniego logowania w bazie SQLite"""
+        self.db.update_last_login(email)
+
+    def get_user_info(self, email: str) -> Optional[Dict[str, Any]]:
+        """Pobiera informacje o użytkowniku"""
+        user = self.db.get_user_by_email(email)
+        if user:
+            return {
+                "id": user["id"],
+                "email": user["email"],
+                "username": user["username"],
+                "security": user["security"],
+                "last_login": user["last_login"]
+            }
         return None

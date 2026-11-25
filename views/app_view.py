@@ -1,10 +1,11 @@
 """
 VIEW - Główny ekran aplikacji (Discord-like)
 """
+
 import customtkinter as ctk
 from utils import Colors, Fonts
 from PIL import Image, ImageDraw
-
+from views.components import VirtualChatView
 
 class AppView(ctk.CTkFrame):
     """Główny widok aplikacji w stylu Discord (View w MVC)"""
@@ -20,6 +21,7 @@ class AppView(ctk.CTkFrame):
         super().__init__(parent, fg_color=Colors.BG_MAIN)
 
         self.user_data = user_data
+        self.controller = None
 
         # Konfiguracja grid - 3 kolumny (serwery | kanały | czat)
         self.grid_columnconfigure(0, weight=0, minsize=72)    # Serwery (stała szerokość)
@@ -58,7 +60,7 @@ class AppView(ctk.CTkFrame):
         self.servers_scroll.pack(fill="both", expand=True, padx=6, pady=8)
 
         # === PRZYCISK HOME (DM) ===
-        self.home_button = self._create_server_button("🏠", "Direct Messages", icon_type="text")
+        self.home_button = self._create_server_button("🏠", "Direct Messages", icon_type="text", server_id=None)
         self.home_button.pack(pady=(0, 8))
 
         # === SEPARATOR ===
@@ -69,29 +71,16 @@ class AppView(ctk.CTkFrame):
         )
         separator.pack(fill="x", pady=8)
 
-        # === VOXEN OFFICIAL - Z LOGO ===
-        voxen_btn = self._create_server_button(
-            "assets/images/logo.ico",
-            "Voxen Official",
-            icon_type="image"
+        # Kontener na dynamicznie ładowane serwery z SQLite
+        self.dynamic_servers_frame = ctk.CTkFrame(
+            self.servers_scroll,
+            fg_color="transparent"
         )
-        voxen_btn.pack(pady=4)
+        self.dynamic_servers_frame.pack(fill="x")
 
-        # === PRZYKŁADOWE SERWERY - Z EMOJI ===
-        servers = [
-            ("🎮", "Gaming"),
-            ("💻", "Coding"),
-            ("🎵", "Music"),
-            ("🎨", "Art"),
-        ]
-
-        for icon, name in servers:
-            btn = self._create_server_button(icon, name, icon_type="text")
-            btn.pack(pady=4)
-
-        # === PRZYCISK DODAJ SERWER ===
-        add_server_btn = self._create_server_button("+", "Dodaj serwer", is_add=True, icon_type="text")
-        add_server_btn.pack(pady=(16, 0))
+        # === PRZYCISK DODAJ SERWER (+) ===
+        self.add_server_btn = self._create_server_button("+", "Dodaj serwer", is_add=True, icon_type="text", server_id="add")
+        self.add_server_btn.pack(pady=(12, 0))
 
     def _create_circular_mask(self, size):
         """Tworzy okrągłą maskę dla obrazka"""
@@ -100,70 +89,66 @@ class AppView(ctk.CTkFrame):
         draw.ellipse((0, 0, size, size), fill=255)
         return mask
 
-    def _create_server_button(self, icon, tooltip, is_add=False, icon_type="text"):
+    def _create_server_button(self, icon, tooltip, is_add=False, icon_type="text", server_id=None, parent_frame=None):
         """
-        Tworzy przycisk serwera (okrągły jak Discord) - NAPRAWIONE!
+        Tworzy przycisk serwera (okrągły jak Discord) wraz ze wskaźnikiem nieprzeczytanych wiadomości
 
         Args:
             icon: Ikona/tekst/ścieżka do obrazka
             tooltip: Tooltip po najechaniu
             is_add: Czy to przycisk dodawania
             icon_type: "text" lub "image" - typ ikony
+            server_id: Identyfikator serwera w bazie danych
+            parent_frame: Opcjonalna ramka rodzica
         """
         color = Colors.BUTTON_ADD if is_add else Colors.BG_MAIN
         hover_color = Colors.BUTTON_PRIMARY if is_add else Colors.BUTTON_SECONDARY
+        parent = parent_frame or self.servers_scroll
 
-        # ✅ KONTENER - Idealny kwadrat 48x48
         button_container = ctk.CTkFrame(
-            self.servers_scroll,
+            parent,
             fg_color="transparent",
             width=48,
             height=48
         )
         button_container.pack_propagate(False)
 
+        if is_add:
+            cmd = self._on_add_server_click
+        else:
+            cmd = lambda sid=server_id, name=tooltip: self._on_server_click(sid, name)
+
         if icon_type == "image":
-            # ✅ PRZYCISK Z OBRAZKIEM (logo)
             try:
                 from PIL import Image
-
-                # Załaduj obrazek
                 logo_img = Image.open(icon).convert("RGBA")
-
-                # Przeskaluj do 36x36
                 logo_img = logo_img.resize((36, 36), Image.Resampling.LANCZOS)
-
-                # Zastosuj okrągłą maskę
                 mask = self._create_circular_mask(36)
                 output = Image.new('RGBA', (36, 36), (0, 0, 0, 0))
                 output.paste(logo_img, (0, 0))
                 output.putalpha(mask)
 
-                # Stwórz CTkImage
                 logo_ctk = ctk.CTkImage(
                     light_image=output,
                     dark_image=output,
                     size=(36, 36)
                 )
 
-                # ✅ UŻYJ CTkButton z obrazkiem (corner_radius działa!)
                 btn = ctk.CTkButton(
                     button_container,
-                    text="",  # Pusty tekst
+                    text="",
                     image=logo_ctk,
                     width=48,
                     height=48,
-                    corner_radius=24,  # ✅ TERAZ DZIAŁA!
+                    corner_radius=24,
                     fg_color=color,
                     hover_color=hover_color,
                     border_width=0,
-                    command=lambda: self._on_server_click(tooltip)
+                    command=cmd
                 )
                 btn.place(relx=0.5, rely=0.5, anchor="center")
 
-            except Exception as e:
-                print(f"Błąd ładowania logo: {e}")
-                # Fallback do tekstu "V"
+            except Exception:
                 btn = ctk.CTkButton(
                     button_container,
                     text="V",
@@ -175,39 +160,75 @@ class AppView(ctk.CTkFrame):
                     font=("Segoe UI", 18, "bold"),
                     text_color=Colors.TEXT_PRIMARY,
                     border_width=0,
-                    command=lambda: self._on_server_click(tooltip)
+                    command=cmd
                 )
                 btn.place(relx=0.5, rely=0.5, anchor="center")
         else:
-            # ✅ PRZYCISK Z TEKSTEM/EMOJI
             btn = ctk.CTkButton(
                 button_container,
                 text=icon,
                 width=48,
                 height=48,
-                corner_radius=24,  # ✅ TERAZ DZIAŁA!
+                corner_radius=24,
                 fg_color=color,
                 hover_color=hover_color,
                 font=("Segoe UI", 18, "bold"),
                 text_color=Colors.TEXT_PRIMARY,
                 border_width=0,
-                command=lambda: self._on_server_click(tooltip)
+                command=cmd
             )
             btn.place(relx=0.5, rely=0.5, anchor="center")
 
+        # Odznaka (Badge) nieprzeczytanych wiadomości dla serwera / DMs
+        if server_id != "add":
+            badge_frame = ctk.CTkFrame(
+                button_container,
+                fg_color=Colors.ERROR,
+                width=20,
+                height=20,
+                corner_radius=10
+            )
+            badge_lbl = ctk.CTkLabel(
+                badge_frame,
+                text="",
+                font=("Segoe UI", 9, "bold"),
+                text_color="#ffffff"
+            )
+            badge_lbl.place(relx=0.5, rely=0.5, anchor="center")
+
+            key = server_id if server_id is not None else "dms"
+            if not hasattr(self, "server_badges"):
+                self.server_badges = {}
+            self.server_badges[key] = (badge_frame, badge_lbl)
+
         return button_container
 
-    def _on_server_click(self, server_name):
-        """Obsługuje kliknięcie serwera"""
-        print(f"Wybrano serwer: {server_name}")
-        # TODO: Załaduj kanały dla tego serwera
+    def _on_server_click(self, server_id, server_name):
+        """Deleguje do controllera"""
+        if self.controller:
+            self.controller.handle_server_click(server_id, server_name)
+
+    def _on_add_server_click(self):
+        """Deleguje kliknięcie przycisku dodania serwera"""
+        if self.controller:
+            self.controller.handle_add_server_click()
+
+    def _on_channel_click(self, server_id, channel_name, topic=""):
+        """Deleguje kliknięcie kanału tekstowego"""
+        if self.controller:
+            self.controller.handle_channel_click(server_id, channel_name, topic)
+
+    def _on_add_channel_click(self):
+        """Deleguje kliknięcie przycisku dodania kanału"""
+        if self.controller and hasattr(self, 'current_server_id'):
+            self.controller.handle_add_channel_click(self.current_server_id)
 
     # ==========================================
-    # ŚRODKOWA KOLUMNA - KANAŁY/KONWERSACJE
+    # ŚRODKOWA KOLUMNA - KANAŁY / DMs
     # ==========================================
 
     def _create_channels_sidebar(self):
-        """Tworzy środkową kolumnę z listą kanałów/DMs"""
+        """Tworzy środkową kolumnę z dynamicznymi kanałami / DMs"""
         self.channels_frame = ctk.CTkFrame(
             self,
             fg_color=Colors.BG_SECONDARY,
@@ -218,91 +239,122 @@ class AppView(ctk.CTkFrame):
         self.channels_frame.grid_propagate(False)
 
         # === HEADER Z NAZWĄ SERWERA ===
-        header = ctk.CTkFrame(
+        self.channels_header = ctk.CTkFrame(
             self.channels_frame,
             fg_color=Colors.BG_MAIN,
             height=48,
             corner_radius=0
         )
-        header.pack(fill="x")
-        header.pack_propagate(False)
+        self.channels_header.pack(fill="x")
+        self.channels_header.pack_propagate(False)
 
-        server_name_label = ctk.CTkLabel(
-            header,
-            text="🏠  Znajomi",
+        self.server_name_label = ctk.CTkLabel(
+            self.channels_header,
+            text="🏠 Znajomi",
             font=Fonts.TITLE_SMALL,
             text_color=Colors.TEXT_PRIMARY,
             anchor="w"
         )
-        server_name_label.pack(side="left", padx=16, fill="both", expand=True)
+        self.server_name_label.pack(side="left", padx=16, fill="both", expand=True)
 
-        # === SEARCH BAR ===
-        search_frame = ctk.CTkFrame(
-            self.channels_frame,
-            fg_color="transparent",
-            height=56
-        )
-        search_frame.pack(fill="x", padx=12, pady=8)
+        # === USER PANEL NA SAMYM DOLE (STAŁY) ===
+        self._create_user_panel()
+
+        # === 1. PANEL DLA DIRECT MESSAGES (ZNAJOMI) ===
+        self.dms_panel = ctk.CTkFrame(self.channels_frame, fg_color="transparent")
+        self._setup_dms_panel()
+
+        # === 2. PANEL DLA KANAŁÓW SERWERA ===
+        self.server_channels_panel = ctk.CTkFrame(self.channels_frame, fg_color="transparent")
+        self._setup_server_channels_panel()
+
+        # Domyślnie pokazujemy Direct Messages
+        self.dms_panel.pack(fill="both", expand=True)
+
+    def _setup_dms_panel(self):
+        """Konfiguruje panel dla wiadomości bezpośrednich (DMs)"""
+        search_frame = ctk.CTkFrame(self.dms_panel, fg_color="transparent", height=48)
+        search_frame.pack(fill="x", padx=12, pady=(8, 4))
 
         self.search_entry = ctk.CTkEntry(
             search_frame,
-            placeholder_text="🔍  Szukaj",
+            placeholder_text="🔍 Szukaj",
             height=32,
             font=Fonts.INPUT,
             fg_color=Colors.BG_MAIN,
             border_width=0
         )
         self.search_entry.pack(fill="x")
+        self.search_entry.bind("<KeyRelease>", self._on_search)
 
-        # === TABS (Dostępni, Oczekujący, Zablokowane) ===
-        tabs_frame = ctk.CTkFrame(
-            self.channels_frame,
-            fg_color="transparent",
-            height=40
-        )
-        tabs_frame.pack(fill="x", padx=8)
+        tabs_frame = ctk.CTkFrame(self.dms_panel, fg_color="transparent", height=36)
+        tabs_frame.pack(fill="x", padx=8, pady=(0, 4))
 
-        tabs = ["Znajomi", "Oczekujący", "Dostępni", "Wszystkie"]
-        for tab in tabs:
-            tab_btn = ctk.CTkButton(
+        for tab in ["Znajomi", "Oczekujący", "Dostępni"]:
+            ctk.CTkButton(
                 tabs_frame,
                 text=tab,
-                height=28,
+                height=26,
                 fg_color="transparent",
                 hover_color=Colors.BG_MAIN,
                 font=Fonts.LABEL,
                 text_color=Colors.TEXT_SECONDARY,
                 corner_radius=4,
                 command=lambda t=tab: self._on_tab_click(t)
-            )
-            tab_btn.pack(side="left", padx=2)
+            ).pack(side="left", padx=2)
 
-        # === SEPARATOR ===
-        separator = ctk.CTkFrame(
-            self.channels_frame,
-            height=2,
-            fg_color=Colors.INPUT_BORDER
-        )
-        separator.pack(fill="x", pady=8)
+        separator = ctk.CTkFrame(self.dms_panel, height=2, fg_color=Colors.INPUT_BORDER)
+        separator.pack(fill="x", pady=4)
 
-        # === LISTA KONWERSACJI (SCROLLABLE) - CIEŃSZY SCROLLBAR ===
         self.conversations_scroll = ctk.CTkScrollableFrame(
-            self.channels_frame,
+            self.dms_panel,
             fg_color="transparent",
             scrollbar_button_color=Colors.INPUT_BORDER,
             scrollbar_button_hover_color=Colors.BG_MAIN,
             scrollbar_fg_color=Colors.BG_SECONDARY
         )
         self.conversations_scroll.pack(fill="both", expand=True, padx=8)
+        self.conversations_scroll._scrollbar.configure(width=12)
 
-        # ✅ Zmniejsz szerokość scrollbara
-        self.conversations_scroll._scrollbar.configure(width=15)
-
-        # Dodaj przykładowe konwersacje
         self._populate_conversations()
 
-        # === USER PANEL NA DOLE ===
-        self._create_user_panel()
+    def _setup_server_channels_panel(self):
+        """Konfiguruje panel dla kanałów tekstowych serwera"""
+        category_header = ctk.CTkFrame(self.server_channels_panel, fg_color="transparent", height=32)
+        category_header.pack(fill="x", padx=12, pady=(10, 4))
+        category_header.pack_propagate(False)
+
+        cat_lbl = ctk.CTkLabel(
+            category_header,
+            text="📢  KANAŁY TEKSTOWE",
+            font=("Segoe UI", 11, "bold"),
+            text_color=Colors.TEXT_SECONDARY,
+            anchor="w"
+        )
+        cat_lbl.pack(side="left", fill="both", expand=True)
+
+        add_channel_btn = ctk.CTkButton(
+            category_header,
+            text="+",
+            width=22,
+            height=22,
+            font=("Segoe UI", 14, "bold"),
+            fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
+            text_color=Colors.TEXT_SECONDARY,
+            command=self._on_add_channel_click
+        )
+        add_channel_btn.pack(side="right")
+
+        self.channels_scroll = ctk.CTkScrollableFrame(
+            self.server_channels_panel,
+            fg_color="transparent",
+            scrollbar_button_color=Colors.INPUT_BORDER,
+            scrollbar_button_hover_color=Colors.BG_MAIN,
+            scrollbar_fg_color=Colors.BG_SECONDARY
+        )
+        self.channels_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        self.channels_scroll._scrollbar.configure(width=12)
 
     def _populate_conversations(self):
         """Wypełnia listę konwersacji"""
@@ -352,7 +404,7 @@ class AppView(ctk.CTkFrame):
         )
         name_label.pack(anchor="w")
 
-        # ✅ Status z kolorową kropką (oddzielnie)
+        # Status z kolorową kropką
         status_container = ctk.CTkFrame(text_container, fg_color="transparent")
         status_container.pack(anchor="w")
 
@@ -366,7 +418,7 @@ class AppView(ctk.CTkFrame):
 
         color, text = status_config.get(status, (Colors.OFFLINE, "Offline"))
 
-        # Kropka (wyrównana)
+        # Kropka
         status_dot = ctk.CTkLabel(
             status_container,
             text="🟢",
@@ -387,57 +439,104 @@ class AppView(ctk.CTkFrame):
         )
         status_text.pack(side="left", padx=(2, 0))
 
-        # Klik
-        item.bind("<Button-1>", lambda e: self._on_conversation_click(name))
+        # Odznaka nieprzeczytanych wiadomości (Badge)
+        badge_frame = ctk.CTkFrame(
+            item,
+            fg_color=Colors.ERROR,
+            corner_radius=10,
+            height=20
+        )
+        badge_label = ctk.CTkLabel(
+            badge_frame,
+            text="",
+            font=("Segoe UI", 10, "bold"),
+            text_color="#ffffff",
+            padx=6
+        )
+        badge_label.pack(fill="both", expand=True)
+
+        if not hasattr(self, "dm_badges"):
+            self.dm_badges = {}
+        self.dm_badges[name] = (badge_frame, badge_label)
+
+        if not hasattr(self, "conversation_status_widgets"):
+            self.conversation_status_widgets = {}
+        self.conversation_status_widgets[name] = (status_dot, status_text)
+
+        # Klik - deleguj do controllera
+        def _click_handler(e=None):
+            self._on_conversation_click(name)
+
+        item.bind("<Button-1>", _click_handler)
+        avatar_label.bind("<Button-1>", _click_handler)
+        text_container.bind("<Button-1>", _click_handler)
+        name_label.bind("<Button-1>", _click_handler)
+        status_container.bind("<Button-1>", _click_handler)
+        status_dot.bind("<Button-1>", _click_handler)
+        status_text.bind("<Button-1>", _click_handler)
+        badge_frame.bind("<Button-1>", _click_handler)
+        badge_label.bind("<Button-1>", _click_handler)
 
     def _on_conversation_click(self, name):
-        """Obsługuje kliknięcie konwersacji"""
-        print(f"Otwarto konwersację z: {name}")
-        self.chat_title.configure(text=f"💬  {name}")
+        """Deleguje do controllera"""
+        if self.controller:
+            self.controller.handle_conversation_click(name)
 
     def _on_tab_click(self, tab_name):
-        """Obsługuje kliknięcie taba"""
-        print(f"Wybrano tab: {tab_name}")
+        """Deleguje do controllera"""
+        if self.controller:
+            self.controller.handle_tab_click(tab_name)
+
+    def _on_search(self, event):
+        """Deleguje wyszukiwanie do controllera"""
+        query = self.search_entry.get()
+        if self.controller:
+            self.controller.handle_search(query)
 
     def _create_user_panel(self):
-        """Tworzy panel użytkownika na dole kanałów"""
-        user_panel = ctk.CTkFrame(
+        """Tworzy panel profilu użytkownika na dole kanałów z możliwością zmiany statusu"""
+        self.user_panel = ctk.CTkFrame(
             self.channels_frame,
             fg_color=Colors.BG_MAIN,
-            height=52,
+            height=54,
             corner_radius=0
         )
-        user_panel.pack(fill="x", side="bottom")
-        user_panel.pack_propagate(False)
+        self.user_panel.pack(fill="x", side="bottom")
+        self.user_panel.pack_propagate(False)
+
+        # Klikalny obszar zmiany statusu
+        user_clickable = ctk.CTkFrame(self.user_panel, fg_color="transparent")
+        user_clickable.pack(side="left", fill="both", expand=True, padx=(4, 0))
 
         # Avatar
-        avatar = ctk.CTkLabel(
-            user_panel,
+        self.my_avatar = ctk.CTkLabel(
+            user_clickable,
             text="👤",
-            font=("Segoe UI", 28),
-            width=40
+            font=("Segoe UI", 26),
+            width=36
         )
-        avatar.pack(side="left", padx=(8, 8))
+        self.my_avatar.pack(side="left", padx=(4, 6))
 
         # User info
-        user_info = ctk.CTkFrame(user_panel, fg_color="transparent")
+        user_info = ctk.CTkFrame(user_clickable, fg_color="transparent")
         user_info.pack(side="left", fill="both", expand=True)
 
-        username = ctk.CTkLabel(
+        uname = self.user_data.get("username") or self.user_data.get("email", "User").split("@")[0]
+        self.my_username = ctk.CTkLabel(
             user_info,
-            text=self.user_data.get("email", "User").split("@")[0],
+            text=uname,
             font=Fonts.LABEL,
             text_color=Colors.TEXT_PRIMARY,
             anchor="w"
         )
-        username.pack(anchor="w", pady=(4, 0))
+        self.my_username.pack(anchor="w", pady=(3, 0))
 
-        # ✅ Status z kolorową kropką (oddzielnie)
+        # Status z kolorową kropką
         status_container = ctk.CTkFrame(user_info, fg_color="transparent")
         status_container.pack(anchor="w")
 
-        # Kropka (wyrównana)
-        status_dot = ctk.CTkLabel(
+        # Kropka
+        self.my_status_dot = ctk.CTkLabel(
             status_container,
             text="🟢",
             font=("Segoe UI", 10),
@@ -445,21 +544,33 @@ class AppView(ctk.CTkFrame):
             width=10,
             anchor="w"
         )
-        status_dot.pack(side="left", pady=(2, 0))
+        self.my_status_dot.pack(side="left", pady=(1, 0))
 
-        # Tekst "Online"
-        status_text = ctk.CTkLabel(
+        # Tekst statusu
+        self.my_status_text = ctk.CTkLabel(
             status_container,
-            text="Online",
+            text="Dostępny",
             font=("Segoe UI", 11),
             text_color=Colors.TEXT_SECONDARY,
             anchor="w"
         )
-        status_text.pack(side="left", padx=(2, 0))
+        self.my_status_text.pack(side="left", padx=(2, 0))
+
+        # Podpięcie otwarcia modalu statusu
+        def _open_status(e=None):
+            self._on_status_menu_click()
+
+        user_clickable.bind("<Button-1>", _open_status)
+        self.my_avatar.bind("<Button-1>", _open_status)
+        user_info.bind("<Button-1>", _open_status)
+        self.my_username.bind("<Button-1>", _open_status)
+        status_container.bind("<Button-1>", _open_status)
+        self.my_status_dot.bind("<Button-1>", _open_status)
+        self.my_status_text.bind("<Button-1>", _open_status)
 
         # Przyciski ustawień
         settings_btn = ctk.CTkButton(
-            user_panel,
+            self.user_panel,
             text="⚙️",
             width=32,
             height=32,
@@ -468,11 +579,140 @@ class AppView(ctk.CTkFrame):
             font=("Segoe UI", 16),
             command=self._on_settings_click
         )
-        settings_btn.pack(side="right", padx=4)
+        settings_btn.pack(side="right", padx=6)
+
+    def _on_status_menu_click(self):
+        """Deleguje otwarcie menu statusu do controllera"""
+        if self.controller and hasattr(self.controller, "handle_status_menu_click"):
+            self.controller.handle_status_menu_click()
+
+    def update_my_status(self, status: str, custom_status: str = ""):
+        """Aktualizuje wskaźnik statusu i tekst w dolnym panelu użytkownika"""
+        from models.presence_tracker import PresenceTracker
+        color, name, dot = PresenceTracker.get_status_info(status)
+        display_text = custom_status if custom_status else name
+
+        if hasattr(self, 'my_status_dot'):
+            self.my_status_dot.configure(text=dot, text_color=color)
+        if hasattr(self, 'my_status_text'):
+            self.my_status_text.configure(text=display_text)
+
+    def update_user_presence(self, username: str, status: str, custom_status: str = ""):
+        """Aktualizuje wskaźnik statusu rozmówcy na liście Direct Messages"""
+        if not hasattr(self, "conversation_status_widgets"):
+            return
+        if username not in self.conversation_status_widgets:
+            return
+
+        from models.presence_tracker import PresenceTracker
+        color, name, dot = PresenceTracker.get_status_info(status)
+        display_text = custom_status if custom_status else name
+
+        dot_lbl, text_lbl = self.conversation_status_widgets[username]
+        dot_lbl.configure(text=dot, text_color=color)
+        text_lbl.configure(text=display_text)
+
+    def show_status_selection_modal(self, current_status: str, current_custom_status: str, callback):
+        """Wyświetla okno modalne wyboru statusu (Dostępny, Zaraz wracam, DND, Niewidoczny)"""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Ustaw status obecności")
+        dialog.geometry("400x480")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text="Ustaw status obecności",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(18, 2))
+
+        ctk.CTkLabel(
+            dialog,
+            text="Wybierz jak chcesz być widoczny dla znajomych.",
+            font=("Segoe UI", 11),
+            text_color=Colors.TEXT_SECONDARY
+        ).pack(pady=(0, 14))
+
+        status_var = ctk.StringVar(value=current_status.lower() if current_status else "online")
+
+        options_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        options_frame.pack(fill="x", padx=24, pady=4)
+
+        from models.presence_tracker import PresenceTracker
+        for skey, sinfo in PresenceTracker.STATUS_CONFIG.items():
+            row = ctk.CTkFrame(options_frame, fg_color=Colors.BG_MAIN, corner_radius=8, height=48)
+            row.pack(fill="x", pady=4)
+            row.pack_propagate(False)
+
+            rb = ctk.CTkRadioButton(
+                row,
+                text=f"{sinfo['dot']}  {sinfo['name']}",
+                value=skey,
+                variable=status_var,
+                font=("Segoe UI", 13, "bold"),
+                text_color=Colors.TEXT_PRIMARY
+            )
+            rb.pack(side="left", padx=12, pady=6)
+
+            desc = ctk.CTkLabel(
+                row,
+                text=sinfo["description"][:28] + ("..." if len(sinfo["description"]) > 28 else ""),
+                font=("Segoe UI", 10),
+                text_color=Colors.TEXT_SECONDARY
+            )
+            desc.pack(side="right", padx=12)
+
+        # Własny status (Custom status)
+        ctk.CTkLabel(
+            dialog,
+            text="WŁASNY STATUS (OPCJONALNIE)",
+            font=("Segoe UI", 11, "bold"),
+            text_color=Colors.TEXT_SECONDARY,
+            anchor="w"
+        ).pack(fill="x", padx=24, pady=(12, 4))
+
+        custom_entry = ctk.CTkEntry(
+            dialog,
+            placeholder_text="np. 🎮 W grze, 💻 Koduję w Pythonie...",
+            font=Fonts.INPUT
+        )
+        if current_custom_status:
+            custom_entry.insert(0, current_custom_status)
+        custom_entry.pack(fill="x", padx=24, pady=(0, 18))
+
+        def _submit():
+            sel_status = status_var.get()
+            c_text = custom_entry.get().strip()
+            dialog.destroy()
+            callback(sel_status, c_text)
+
+        btn_box = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_box.pack(fill="x", padx=24, pady=(4, 12))
+
+        ctk.CTkButton(
+            btn_box,
+            text="Anuluj",
+            fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
+            width=100,
+            command=dialog.destroy
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            btn_box,
+            text="Zapisz status",
+            fg_color=Colors.BUTTON_PRIMARY,
+            hover_color=Colors.BUTTON_PRIMARY_HOVER,
+            width=140,
+            command=_submit
+        ).pack(side="right")
 
     def _on_settings_click(self):
-        """Otwiera ustawienia"""
-        print("Otwarto ustawienia")
+        """Deleguje do controllera"""
+        if self.controller:
+            self.controller.handle_settings_click()
 
     # ==========================================
     # PRAWA KOLUMNA - OBSZAR CZATU
@@ -499,35 +739,28 @@ class AppView(ctk.CTkFrame):
 
         self.chat_title = ctk.CTkLabel(
             chat_header,
-            text="💬  Wybierz konwersację",
+            text="💬 Wybierz konwersację",
             font=Fonts.TITLE_SMALL,
             text_color=Colors.TEXT_PRIMARY,
             anchor="w"
         )
         self.chat_title.pack(side="left", padx=16, fill="both", expand=True)
 
-        # === OBSZAR WIADOMOŚCI (SCROLLABLE) - CIEŃSZY SCROLLBAR ===
-        self.messages_scroll = ctk.CTkScrollableFrame(
+        # Wskaźnik stanu sieci i latencji (Discord-like connection badge)
+        self.net_status_label = ctk.CTkLabel(
+            chat_header,
+            text="🟢 Połączono",
+            font=("Segoe UI", 11),
+            text_color=Colors.ONLINE
+        )
+        self.net_status_label.pack(side="right", padx=16)
+
+        # === OBSZAR WIADOMOŚCI - WIRTUALIZOWANY (OBJECT POOLING O(1)) ===
+        self.virtual_chat = VirtualChatView(
             self.chat_frame,
-            fg_color="transparent",
-            scrollbar_button_color=Colors.INPUT_BORDER,
-            scrollbar_button_hover_color=Colors.BG_MAIN,
-            scrollbar_fg_color=Colors.BG_RIGHT
+            fg_color="transparent"
         )
-        self.messages_scroll.pack(fill="both", expand=True, padx=16, pady=16)
-
-        # ✅ Zmniejsz szerokość scrollbara
-        self.messages_scroll._scrollbar.configure(width=15)
-
-        # Przykładowa wiadomość powitalna
-        welcome_label = ctk.CTkLabel(
-            self.messages_scroll,
-            text=f"Witaj, {self.user_data.get('email', 'User').split('@')[0]}! 👋\n\nWybierz konwersację z lewej strony.",
-            font=Fonts.SUBTITLE,
-            text_color=Colors.TEXT_SECONDARY,
-            justify="center"
-        )
-        welcome_label.pack(pady=100)
+        self.virtual_chat.pack(fill="both", expand=True, padx=16, pady=(12, 4))
 
         # === INPUT DO WPISYWANIA WIADOMOŚCI ===
         self._create_message_input()
@@ -537,10 +770,20 @@ class AppView(ctk.CTkFrame):
         input_container = ctk.CTkFrame(
             self.chat_frame,
             fg_color="transparent",
-            height=68
+            height=74
         )
         input_container.pack(fill="x", padx=16, pady=(0, 16))
         input_container.pack_propagate(False)
+
+        # Wskaźnik "pisze..." (typing indicator)
+        self.typing_label = ctk.CTkLabel(
+            input_container,
+            text="",
+            font=("Segoe UI", 11, "italic"),
+            text_color=Colors.TEXT_SECONDARY,
+            anchor="w"
+        )
+        self.typing_label.pack(fill="x", padx=4, pady=(0, 2))
 
         # Frame z inputem (jak Discord)
         input_frame = ctk.CTkFrame(
@@ -574,6 +817,7 @@ class AppView(ctk.CTkFrame):
         )
         self.message_entry.pack(side="left", fill="both", expand=True, padx=8)
         self.message_entry.bind("<Return>", self._on_send_message)
+        self.message_entry.bind("<KeyRelease>", self._on_input_key)
 
         # Przycisk emoji
         emoji_btn = ctk.CTkButton(
@@ -589,17 +833,379 @@ class AppView(ctk.CTkFrame):
         emoji_btn.pack(side="right", padx=4)
 
     def _on_send_message(self, event=None):
-        """Wysyła wiadomość"""
+        """Deleguje do controllera"""
         message = self.message_entry.get().strip()
-        if message:
-            print(f"Wysłano: {message}")
-            self.message_entry.delete(0, "end")
-            # TODO: Dodaj wiadomość do czatu
+        if self.controller:
+            self.controller.handle_send_message(message)
+
+    def _on_input_key(self, event):
+        """Obsługuje wprowadzanie znaków w polu wiadomości"""
+        # Ignoruj klawisze funkcyjne, nawigacyjne i modyfikatory
+        if event.keysym in ["Return", "Shift_L", "Shift_R", "Control_L", "Control_R", 
+                            "Alt_L", "Alt_R", "Caps_Lock", "Escape", "Tab", "Up", "Down", "Left", "Right"]:
+            return
+
+        text = self.message_entry.get().strip()
+        if text and self.controller and hasattr(self.controller, "handle_user_typing"):
+            self.controller.handle_user_typing()
+        elif not text and self.controller and hasattr(self.controller, "handle_user_stop_typing"):
+            self.controller.handle_user_stop_typing()
 
     def _on_attach_click(self):
-        """Otwiera dialog wyboru pliku"""
-        print("Wybierz plik do wysłania")
+        """Deleguje do controllera"""
+        if self.controller:
+            self.controller.handle_attach_click()
 
     def _on_emoji_click(self):
-        """Otwiera picker emoji"""
-        print("Otwarto picker emoji")
+        """Deleguje do controllera"""
+        if self.controller:
+            self.controller.handle_emoji_click()
+
+    # ==========================================
+    # PUBLICZNE METODY DLA CONTROLLERA
+    # ==========================================
+
+    def set_controller(self, controller):
+        """
+        Ustawia controller
+
+        Args:
+            controller: Instancja AppController
+        """
+        self.controller = controller
+
+    def update_channels_header(self, text):
+        """Aktualizuje nagłówek sekcji kanałów"""
+        self.server_name_label.configure(text=text)
+
+    def update_chat_title(self, text, topic=""):
+        """Aktualizuje tytuł czatu i opcjonalny temat kanału"""
+        if topic:
+            self.chat_title.configure(text=f"{text}  |  {topic}")
+        else:
+            self.chat_title.configure(text=text)
+
+    def render_servers(self, servers_list: list):
+        """Dynamicznie renderuje serwery pobrane z SQLite w lewej kolumnie"""
+        for child in self.dynamic_servers_frame.winfo_children():
+            child.destroy()
+
+        for s in servers_list:
+            s_id = s.get("id")
+            s_name = s.get("name", "Server")
+            s_icon = s.get("icon", "📁")
+            icon_type = "image" if ("." in s_icon or "/" in s_icon) else "text"
+
+            btn = self._create_server_button(
+                icon=s_icon,
+                tooltip=s_name,
+                is_add=False,
+                icon_type=icon_type,
+                server_id=s_id,
+                parent_frame=self.dynamic_servers_frame
+            )
+            btn.pack(pady=4)
+
+    def show_server_channels(self, server_id: int, server_name: str, channels_list: list):
+        """Przełącza środkowy panel na listę kanałów wybranego serwera"""
+        self.current_server_id = server_id
+        self.server_name_label.configure(text=f"📁 {server_name}")
+
+        self.dms_panel.pack_forget()
+        self.server_channels_panel.pack(fill="both", expand=True)
+
+        for w in self.channels_scroll.winfo_children():
+            w.destroy()
+
+        self.channel_buttons = {}
+        self.channel_badges = {}
+        for ch in channels_list:
+            ch_name = ch["name"]
+            ch_topic = ch.get("topic", "")
+
+            ch_row = ctk.CTkFrame(self.channels_scroll, fg_color="transparent", height=34)
+            ch_row.pack(fill="x", pady=2)
+
+            btn = ctk.CTkButton(
+                ch_row,
+                text=f"#  {ch_name}",
+                anchor="w",
+                font=("Segoe UI", 13),
+                height=34,
+                fg_color="transparent",
+                hover_color=Colors.BG_MAIN,
+                text_color=Colors.TEXT_SECONDARY,
+                corner_radius=6,
+                command=lambda cid=server_id, cname=ch_name, ctop=ch_topic: self._on_channel_click(cid, cname, ctop)
+            )
+            btn.pack(side="left", fill="both", expand=True)
+
+            badge_frame = ctk.CTkFrame(
+                ch_row,
+                fg_color=Colors.ERROR,
+                corner_radius=9,
+                height=18
+            )
+            badge_lbl = ctk.CTkLabel(
+                badge_frame,
+                text="",
+                font=("Segoe UI", 9, "bold"),
+                text_color="#ffffff",
+                padx=5
+            )
+            badge_lbl.pack(fill="both", expand=True)
+
+            self.channel_buttons[ch_name] = btn
+            self.channel_badges[ch_name] = (badge_frame, badge_lbl)
+
+    def update_dm_badge(self, name: str, count: int):
+        """Aktualizuje odznakę nieprzeczytanych wiadomości dla rozmówcy DM"""
+        if not hasattr(self, "dm_badges") or name not in self.dm_badges:
+            return
+        badge_frame, badge_lbl = self.dm_badges[name]
+        if count > 0:
+            badge_lbl.configure(text=str(count) if count < 100 else "99+")
+            badge_frame.pack(side="right", padx=(0, 8))
+        else:
+            badge_frame.pack_forget()
+
+    def update_channel_badge(self, channel_name: str, count: int):
+        """Aktualizuje odznakę nieprzeczytanych wiadomości dla kanału serwera"""
+        if not hasattr(self, "channel_badges") or channel_name not in self.channel_badges:
+            return
+        badge_frame, badge_lbl = self.channel_badges[channel_name]
+        if count > 0:
+            badge_lbl.configure(text=str(count) if count < 100 else "99+")
+            badge_frame.pack(side="right", padx=(0, 6))
+        else:
+            badge_frame.pack_forget()
+
+    def update_server_badge(self, server_id, count: int):
+        """Aktualizuje odznakę nieprzeczytanych wiadomości na ikonie serwera lub DMs"""
+        key = server_id if server_id is not None else "dms"
+        if not hasattr(self, "server_badges") or key not in self.server_badges:
+            return
+        badge_frame, badge_lbl = self.server_badges[key]
+        if count > 0:
+            badge_lbl.configure(text=str(count) if count < 100 else "99+")
+            badge_frame.place(relx=0.88, rely=0.15, anchor="center")
+            badge_frame.lift()
+        else:
+            badge_frame.place_forget()
+
+    def show_in_app_toast(self, title: str, message: str, duration_ms: int = 4000):
+        """Wyświetla elegancki toast in-app w prawym górnym rogu ekranu"""
+        if hasattr(self, "_toast_frame") and self._toast_frame:
+            try:
+                self._toast_frame.destroy()
+            except Exception:
+                pass
+
+        self._toast_frame = ctk.CTkFrame(
+            self,
+            fg_color=Colors.BG_SIDEBAR,
+            border_color=Colors.BUTTON_PRIMARY,
+            border_width=1,
+            corner_radius=10,
+            width=320,
+            height=60
+        )
+        self._toast_frame.pack_propagate(False)
+
+        icon_lbl = ctk.CTkLabel(
+            self._toast_frame,
+            text="🔔",
+            font=("Segoe UI", 18),
+            width=30
+        )
+        icon_lbl.pack(side="left", padx=(10, 6))
+
+        text_box = ctk.CTkFrame(self._toast_frame, fg_color="transparent")
+        text_box.pack(side="left", fill="both", expand=True, pady=6)
+
+        t_lbl = ctk.CTkLabel(
+            text_box,
+            text=title,
+            font=("Segoe UI", 12, "bold"),
+            text_color=Colors.TEXT_PRIMARY,
+            anchor="w"
+        )
+        t_lbl.pack(fill="x")
+
+        preview = message[:40] + ("..." if len(message) > 40 else "")
+        m_lbl = ctk.CTkLabel(
+            text_box,
+            text=preview,
+            font=("Segoe UI", 11),
+            text_color=Colors.TEXT_SECONDARY,
+            anchor="w"
+        )
+        m_lbl.pack(fill="x")
+
+        self._toast_frame.place(relx=0.82, rely=0.07, anchor="center")
+        self._toast_frame.lift()
+
+        def _dismiss(e=None):
+            if hasattr(self, "_toast_frame") and self._toast_frame:
+                try:
+                    self._toast_frame.place_forget()
+                    self._toast_frame.destroy()
+                    self._toast_frame = None
+                except Exception:
+                    pass
+
+        self._toast_frame.bind("<Button-1>", _dismiss)
+        icon_lbl.bind("<Button-1>", _dismiss)
+        text_box.bind("<Button-1>", _dismiss)
+        t_lbl.bind("<Button-1>", _dismiss)
+        m_lbl.bind("<Button-1>", _dismiss)
+
+        self.after(duration_ms, _dismiss)
+
+    def highlight_active_channel(self, channel_name: str):
+        """Wyróżnia aktywny kanał tekstowy na liście kanałów"""
+        if not hasattr(self, 'channel_buttons'):
+            return
+        for cname, btn in self.channel_buttons.items():
+            if cname == channel_name:
+                btn.configure(fg_color=Colors.BG_MAIN, text_color=Colors.TEXT_PRIMARY)
+            else:
+                btn.configure(fg_color="transparent", text_color=Colors.TEXT_SECONDARY)
+
+    def show_dms_sidebar(self):
+        """Przełącza środkowy panel z powrotem na wiadomości prywatne (Znajomi)"""
+        self.server_name_label.configure(text="🏠 Znajomi")
+        self.server_channels_panel.pack_forget()
+        self.dms_panel.pack(fill="both", expand=True)
+
+    def show_create_server_modal(self, callback):
+        """Otwiera okno modalne tworzenia nowego serwera"""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Stwórz serwer")
+        dialog.geometry("380x320")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text="Stwórz własny serwer",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(20, 4))
+
+        ctk.CTkLabel(
+            dialog,
+            text="Twój serwer to przestrzeń do rozmów i gier ze znajomymi.",
+            font=("Segoe UI", 11),
+            text_color=Colors.TEXT_SECONDARY
+        ).pack(pady=(0, 16))
+
+        ctk.CTkLabel(dialog, text="NAZWA SERWERA", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=30)
+        name_entry = ctk.CTkEntry(dialog, placeholder_text="np. Społeczność Python", font=Fonts.INPUT)
+        name_entry.pack(fill="x", padx=30, pady=(4, 12))
+        name_entry.focus()
+
+        ctk.CTkLabel(dialog, text="WYBIERZ IKONĘ", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=30)
+        icon_var = ctk.StringVar(value="🚀")
+        icon_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        icon_frame.pack(fill="x", padx=30, pady=(4, 20))
+
+        emojis = ["🚀", "🎮", "💻", "🎵", "🎨", "⚔️", "🛡️", "🌐"]
+        for em in emojis:
+            ctk.CTkRadioButton(
+                icon_frame,
+                text=em,
+                value=em,
+                variable=icon_var,
+                width=34,
+                font=("Segoe UI", 16)
+            ).pack(side="left", padx=1)
+
+        def _submit():
+            s_name = name_entry.get().strip()
+            if s_name:
+                dialog.destroy()
+                callback(s_name, icon_var.get())
+
+        btn_box = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_box.pack(fill="x", padx=30)
+
+        ctk.CTkButton(btn_box, text="Anuluj", fg_color="transparent", hover_color=Colors.BG_MAIN, width=100, command=dialog.destroy).pack(side="left")
+        ctk.CTkButton(btn_box, text="Utwórz", fg_color=Colors.BUTTON_PRIMARY, hover_color=Colors.BUTTON_PRIMARY_HOVER, width=120, command=_submit).pack(side="right")
+        name_entry.bind("<Return>", lambda e: _submit())
+
+    def show_create_channel_modal(self, server_name: str, callback):
+        """Otwiera okno modalne tworzenia nowego kanału tekstowego"""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Utwórz kanał")
+        dialog.geometry("380x280")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text=f"Utwórz kanał w {server_name}",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(20, 4))
+
+        ctk.CTkLabel(dialog, text="NAZWA KANAŁU", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=30)
+        name_entry = ctk.CTkEntry(dialog, placeholder_text="np. dyskusje", font=Fonts.INPUT)
+        name_entry.pack(fill="x", padx=30, pady=(4, 12))
+        name_entry.focus()
+
+        ctk.CTkLabel(dialog, text="TEMAT KANAŁU (OPCJONALNY)", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=30)
+        topic_entry = ctk.CTkEntry(dialog, placeholder_text="O czym rozmawiamy na tym kanale?", font=Fonts.INPUT)
+        topic_entry.pack(fill="x", padx=30, pady=(4, 20))
+
+        def _submit():
+            c_name = name_entry.get().strip()
+            c_topic = topic_entry.get().strip()
+            if c_name:
+                dialog.destroy()
+                callback(c_name, c_topic)
+
+        btn_box = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_box.pack(fill="x", padx=30)
+
+        ctk.CTkButton(btn_box, text="Anuluj", fg_color="transparent", hover_color=Colors.BG_MAIN, width=100, command=dialog.destroy).pack(side="left")
+        ctk.CTkButton(btn_box, text="Utwórz", fg_color=Colors.BUTTON_PRIMARY, hover_color=Colors.BUTTON_PRIMARY_HOVER, width=120, command=_submit).pack(side="right")
+        name_entry.bind("<Return>", lambda e: _submit())
+
+    def clear_message_input(self):
+        """Czyści pole tekstowe wiadomości"""
+        self.message_entry.delete(0, "end")
+
+    def add_message(self, sender: str, text: str, is_own: bool = False, timestamp: str = "", is_bot: bool = False):
+        """Dodaje nową wiadomość do wirtualizowanego czatu (O(1))"""
+        self.virtual_chat.add_message(
+            sender=sender,
+            content=text,
+            is_own=is_own,
+            timestamp=timestamp,
+            is_bot=is_bot or ("Bot" in sender)
+        )
+
+    def load_message_history(self, messages_data: list):
+        """Ładuje historię wiadomości do wirtualnego widoku"""
+        self.virtual_chat.set_messages(messages_data)
+
+    def clear_chat_messages(self):
+        """Czyści widok wiadomości"""
+        self.virtual_chat.clear()
+
+    def set_typing_indicator(self, text: str):
+        """Ustawia sformatowany tekst wskaźnika pisania wielu użytkowników"""
+        if hasattr(self, 'typing_label'):
+            self.typing_label.configure(
+                text=text,
+                text_color=Colors.TEXT_PRIMARY if text else Colors.TEXT_SECONDARY
+            )
+
+    def update_network_status(self, text: str, color: str):
+        """Aktualizuje badge połączenia w nagłówku"""
+        if hasattr(self, 'net_status_label'):
+            self.net_status_label.configure(text=text, text_color=color)
+

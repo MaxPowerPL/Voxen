@@ -36,7 +36,14 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Unit test / coverage reports
+# Voxen Database & Session Secrets
+*.db
+*.db-wal
+*.db-shm
+.voxen_session
+*.migrated
+test_*.db
+
 htmlcov/
 .tox/
 .nox/
@@ -211,3 +218,4 @@ env/
 .venv/
 
 *.json
+AGENTS.md
