@@ -38,6 +38,7 @@ class ChatMessageDTO:
     calculated_height: int = 58
     attachments: list = field(default_factory=list)
     reactions: list = field(default_factory=list)
+    is_pinned: bool = False
 
     def __post_init__(self):
         if not self.timestamp:
@@ -125,11 +126,23 @@ class PooledMessageWidget(ctk.CTkFrame):
         self._bound_width: int = 0
         self._bound_height: int = 0
         self._moderation_callback = None
+        self._pin_callback = None
+        self._is_pinned = False
         self.moderation_frame = ctk.CTkFrame(
             self.content_frame,
             fg_color="transparent"
         )
         self.moderation_frame.pack(anchor="e", fill="x", pady=(0, 2))
+        self._pin_button = ctk.CTkButton(
+            self.moderation_frame,
+            text="📌",
+            width=34,
+            height=24,
+            fg_color="transparent",
+            hover_color=Colors.BUTTON_PRIMARY,
+            command=self._on_pin
+        )
+        self._pin_button.pack_forget()
         self._moderation_button = ctk.CTkButton(
             self.moderation_frame,
             text="🗑",
@@ -142,6 +155,30 @@ class PooledMessageWidget(ctk.CTkFrame):
 
     def set_moderation_callback(self, callback: Optional[Callable[[str], None]]) -> None:
         self._moderation_callback = callback
+
+    def set_pin_callback(
+        self,
+        callback: Optional[Callable[[str], None]],
+        enabled: bool = True
+    ) -> None:
+        self._pin_callback = callback
+        if enabled:
+            self._pin_button.configure(state="normal")
+            self._pin_button.pack(side="right", padx=(4, 0), pady=2)
+        else:
+            self._pin_button.configure(state="disabled")
+            self._pin_button.pack_forget()
+
+    def set_pinned(self, pinned: bool) -> None:
+        self._is_pinned = pinned
+        self._pin_button.configure(
+            text="📌",
+            fg_color=Colors.BUTTON_PRIMARY if pinned else "transparent"
+        )
+
+    def _on_pin(self) -> None:
+        if self._pin_callback:
+            self._pin_callback(str(self._message_id))
 
     def set_moderation_enabled(self, enabled: bool) -> None:
         self._moderation_enabled = enabled
@@ -272,6 +309,7 @@ class PooledMessageWidget(ctk.CTkFrame):
         self._render_attachments(message.attachments)
         self._render_reactions(message.id, message.reactions)
         self.set_moderation_enabled(getattr(self, "_moderation_enabled", False))
+        self.set_pinned(getattr(message, "is_pinned", False))
 
 
 class VirtualChatView(ctk.CTkFrame):
@@ -296,6 +334,8 @@ class VirtualChatView(ctk.CTkFrame):
         self.reaction_callback: Optional[Callable[[str, str], None]] = None
         self.moderation_callback: Optional[Callable[[str], None]] = None
         self.moderation_enabled: bool = False
+        self.pin_callback: Optional[Callable[[str], None]] = None
+        self.pin_enabled: bool = True
 
         # Stan widoku i przewijania
         self.viewport_height: int = 1
@@ -396,6 +436,16 @@ class VirtualChatView(ctk.CTkFrame):
             widget.set_moderation_callback(callback)
             widget.set_moderation_enabled(enabled)
 
+    def set_pin_callback(
+        self,
+        callback: Optional[Callable[[str], None]],
+        enabled: bool = True
+    ) -> None:
+        self.pin_callback = callback
+        self.pin_enabled = enabled
+        for widget in self.pool:
+            widget.set_pin_callback(callback, enabled)
+
     def add_message(
         self,
         sender: str,
@@ -464,7 +514,8 @@ class VirtualChatView(ctk.CTkFrame):
                 is_bot=item.get("is_bot", False),
                 calculated_height=h,
                 attachments=attachments,
-                reactions=reactions
+                reactions=reactions,
+                is_pinned=item.get("is_pinned", False)
             )
             self.messages.append(dto)
             self.offsets.append(self.offsets[-1] + h)

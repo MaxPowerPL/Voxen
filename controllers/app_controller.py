@@ -777,6 +777,47 @@ class AppController:
                     self.current_conversation or "Direct Messages"
                 )
 
+    def handle_toggle_pin(self, message_id: str) -> None:
+        """Pins or unpins a message in the active conversation."""
+        try:
+            db_message_id = int(message_id)
+        except (TypeError, ValueError):
+            return
+
+        if self.current_server_id:
+            actor_id = self.current_user.get("id", 1)
+            if not self.server_model.can_moderate(self.current_server_id, actor_id):
+                return
+        if self.chat_model.is_message_pinned(db_message_id):
+            success = self.chat_model.unpin_message(db_message_id)
+            action = "unpinned"
+        else:
+            success, _ = self.chat_model.pin_message(
+                db_message_id,
+                self.current_conversation or "Direct Messages",
+                self.sender_name
+            )
+            action = "pinned"
+
+        if success:
+            if self.current_server_id:
+                self.server_model.log_activity(
+                    self.current_server_id,
+                    self.current_user.get("id", 1),
+                    f"message_{action}",
+                    None,
+                    f"Message {db_message_id} {action}"
+                )
+            self._load_conversation_history(self.current_conversation)
+
+    def handle_show_pinned_messages(self) -> None:
+        """Shows pinned messages for the active conversation."""
+        pinned = self.chat_model.get_pinned_messages(
+            self.current_conversation or "Direct Messages"
+        )
+        if hasattr(self.view, "show_pinned_messages_modal"):
+            self.view.show_pinned_messages_modal(pinned)
+
     def handle_timeout_member(self, user_name: str, minutes: int = 10) -> None:
         """Times out a member in the active server."""
         if not self.current_server_id:

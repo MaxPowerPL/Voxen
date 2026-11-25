@@ -104,6 +104,15 @@ class DatabaseManager:
                     created_at TEXT NOT NULL
                 );
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pinned_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+                    conversation TEXT NOT NULL,
+                    pinned_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+            """)
 
             # Migracja kolumny is_read jeśli brak w istniejącej tabeli
             cursor.execute("PRAGMA table_info(messages);")
@@ -218,6 +227,7 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender, target);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(target, is_read);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pinned_messages_conversation ON pinned_messages(conversation);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_server ON channels(server_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_channel_permissions_channel ON channel_permissions(channel_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);")
@@ -616,6 +626,8 @@ class DatabaseManager:
                 )
                 row_dict["attachments"] = [dict(att) for att in cursor.fetchall()]
                 row_dict["reactions"] = self.get_message_reactions(row_dict["id"])
+                row_dict["is_pinned"] = self.is_message_pinned(row_dict["id"])
+                row_dict["is_pinned"] = self.is_message_pinned(row_dict["id"])
                 result.append(row_dict)
             return result
 
@@ -731,6 +743,77 @@ class DatabaseManager:
             cursor.execute("DELETE FROM messages WHERE id = ?", (message_id,))
             conn.commit()
             return cursor.rowcount > 0
+
+    def pin_message(
+        self,
+        message_id: int,
+        conversation: str,
+        pinned_by: str
+    ) -> tuple:
+        """Pins a message in a DM or channel."""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM messages WHERE id = ?", (message_id,))
+            if not cursor.fetchone():
+                return False, "Nie znaleziono wiadomości."
+            cursor.execute("""
+                INSERT INTO pinned_messages (message_id, conversation, pinned_by, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(message_id) DO UPDATE SET
+                    conversation = excluded.conversation,
+                    pinned_by = excluded.pinned_by
+            """, (message_id, conversation.strip(), pinned_by.strip(), now_str))
+            conn.commit()
+            return True, {
+                "message_id": message_id,
+                "conversation": conversation.strip(),
+                "pinned_by": pinned_by.strip()
+            }
+
+    def unpin_message(self, message_id: int) -> bool:
+        """Removes a pinned message."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM pinned_messages WHERE message_id = ?", (message_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def is_message_pinned(self, message_id: int) -> bool:
+        """Checks whether a message is pinned."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM pinned_messages WHERE message_id = ?", (message_id,))
+            return cursor.fetchone() is not None
+
+    def get_pinned_messages(self, conversation: str) -> list:
+        """Returns pinned messages for a DM or channel."""
+        conv = conversation.strip()
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    m.id,
+                    m.packet_id,
+                    m.sender,
+                    m.target,
+                    m.content,
+                    m.timestamp,
+                    m.is_dm,
+                    m.created_at,
+                    pm.pinned_by,
+                    pm.created_at AS pinned_at
+                FROM pinned_messages pm
+                JOIN messages m ON m.id = pm.message_id
+                WHERE pm.conversation = ?
+                ORDER BY pm.id DESC
+            """, (conv,))
+            result = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                item["is_pinned"] = True
+                result.append(item)
+            return result
 
     def timeout_server_member(
         self,

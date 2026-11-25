@@ -106,3 +106,19 @@ class ChatModel:
     def delete_message(self, message_id: int) -> bool:
         """Deletes a message through the database layer."""
         return self.db.delete_message(message_id)
+
+    def pin_message(self, message_id: int, conversation: str, pinned_by: str) -> tuple:
+        """Pins a message in the selected conversation."""
+        return self.db.pin_message(message_id, conversation, pinned_by)
+
+    def unpin_message(self, message_id: int) -> bool:
+        """Unpins a message."""
+        return self.db.unpin_message(message_id)
+
+    def is_message_pinned(self, message_id: int) -> bool:
+        """Checks whether a message is pinned."""
+        return self.db.is_message_pinned(message_id)
+
+    def get_pinned_messages(self, conversation: str) -> list:
+        """Gets pinned messages for the selected conversation."""
+        return self.db.get_pinned_messages(conversation)

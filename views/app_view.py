@@ -828,6 +828,17 @@ class AppView(ctk.CTkFrame):
         )
         self.chat_title.pack(side="left", padx=(16, 8), fill="both", expand=True)
 
+        self.pinned_messages_button = ctk.CTkButton(
+            chat_header,
+            text="📌",
+            width=36,
+            height=30,
+            fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
+            command=self._on_pinned_messages_click
+        )
+        self.pinned_messages_button.pack(side="right", padx=(4, 2))
+
         self.history_search_entry = ctk.CTkEntry(
             chat_header,
             placeholder_text="Szukaj w historii",
@@ -974,6 +985,11 @@ class AppView(ctk.CTkFrame):
         if self.controller:
             self.controller.handle_attach_click()
 
+    def _on_pinned_messages_click(self):
+        """Delegates pinned-message panel display to the controller."""
+        if self.controller:
+            self.controller.handle_show_pinned_messages()
+
     def _on_emoji_click(self):
         """Deleguje do controllera"""
         if self.controller:
@@ -994,6 +1010,10 @@ class AppView(ctk.CTkFrame):
         if hasattr(self, "virtual_chat"):
             self.virtual_chat.set_reaction_callback(
                 lambda message_id, emoji: controller.handle_message_reaction(message_id, emoji)
+            )
+            self.virtual_chat.set_pin_callback(
+                lambda message_id: controller.handle_toggle_pin(message_id),
+                enabled=True
             )
 
     def update_channels_header(self, text):
@@ -1622,6 +1642,65 @@ class AppView(ctk.CTkFrame):
                 font=("Segoe UI", 17),
                 command=lambda e=emoji: _choose(e)
             ).grid(row=index // 6, column=index % 6, padx=3, pady=3)
+
+    def show_pinned_messages_modal(self, pinned_messages: list) -> None:
+        """Shows pinned messages for the active conversation."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Przypięte wiadomości")
+        dialog.geometry("520x420")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text="📌 Przypięte wiadomości",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(16, 10))
+
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=320)
+        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        if not pinned_messages:
+            ctk.CTkLabel(
+                scroll,
+                text="Brak przypiętych wiadomości.",
+                text_color=Colors.TEXT_SECONDARY
+            ).pack(pady=20)
+
+        for item in pinned_messages:
+            card = ctk.CTkFrame(scroll, fg_color=Colors.BG_RIGHT, corner_radius=8)
+            card.pack(fill="x", pady=4)
+            ctk.CTkLabel(
+                card,
+                text=f"{item.get('sender', 'User')} • {item.get('timestamp', '')}",
+                font=Fonts.LABEL,
+                text_color=Colors.TEXT_PRIMARY,
+                anchor="w"
+            ).pack(fill="x", padx=10, pady=(8, 2))
+            ctk.CTkLabel(
+                card,
+                text=item.get("content", ""),
+                text_color=Colors.TEXT_INPUT,
+                justify="left",
+                anchor="w",
+                wraplength=460
+            ).pack(fill="x", padx=10, pady=(0, 6))
+            ctk.CTkLabel(
+                card,
+                text=f"Przypiął: {item.get('pinned_by', 'User')} • {item.get('pinned_at', '')}",
+                font=("Segoe UI", 10),
+                text_color=Colors.TEXT_SECONDARY,
+                anchor="w"
+            ).pack(fill="x", padx=10, pady=(0, 8))
+
+        ctk.CTkButton(
+            dialog,
+            text="Zamknij",
+            fg_color="transparent",
+            width=100,
+            command=dialog.destroy
+        ).pack(pady=(0, 12))
 
     def clear_history_search(self):
         """Clears all history-search fields."""
