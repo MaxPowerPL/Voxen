@@ -2,6 +2,30 @@
 Plik konfiguracyjny z kolorami i ustawieniami dla aplikacji Discord
 """
 
+# 20 distinct, vibrant nickname colors readable on #313338
+RGB_ROLE_COLORS = [
+    "#ff3333",  # red
+    "#dc143c",  # crimson
+    "#ff6b6b",  # coral
+    "#ff7a00",  # orange
+    "#ffaa00",  # amber
+    "#ffd700",  # gold
+    "#f1e600",  # yellow
+    "#84ff00",  # lime
+    "#23a55a",  # green
+    "#00c853",  # emerald
+    "#00c7a3",  # teal
+    "#00d9ff",  # cyan
+    "#38bdf8",  # sky blue
+    "#3385ff",  # blue
+    "#4169e1",  # royal blue
+    "#1d4ed8",  # navy
+    "#7c3aed",  # indigo
+    "#a855f7",  # violet
+    "#d946ef",  # magenta
+    "#ff2d95",  # hot pink
+]
+
 # === KOLORY DLA CIEMNEGO MOTYWU ===
 # Kolory są zdefiniowane jako tuple: (kolor_jasny, kolor_ciemny)
 # lub pojedyncze wartości dla obu motywów
@@ -91,6 +115,6 @@ class Dimensions:
 class Config:
     """Ogólna konfiguracja aplikacji"""
 
-    APP_TITLE = "Voxen v0.1.8 - alpha"
+    APP_TITLE = "Voxen v0.1.9 - alpha"
     APPEARANCE_MODE = "dark"      # "dark", "light", "system"
     COLOR_THEME = "dark-blue"          # "blue", "dark-blue", "green"

@@ -198,6 +198,19 @@ class DatabaseManager:
                 );
             """)
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS server_roles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    color TEXT NOT NULL DEFAULT '#5865f2',
+                    is_rgb INTEGER NOT NULL DEFAULT 0,
+                    rgb_interval_ms INTEGER NOT NULL DEFAULT 5000,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(server_id, name)
+                );
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS member_timeouts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
@@ -299,6 +312,34 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_server ON server_members(server_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_user ON server_members(user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_roles_server ON server_roles(server_id);")
+
+            cursor.execute("SELECT id FROM servers")
+            server_ids = [row["id"] for row in cursor.fetchall()]
+            default_roles = [
+                ("owner", 100, "#f23f43", 0, 5000),
+                ("rgb", 95, "#5865f2", 1, 5000),
+                ("admin", 80, "#5865f2", 0, 5000),
+                ("moderator", 60, "#23a55a", 0, 5000),
+                ("member", 10, "#b5bac1", 0, 5000),
+            ]
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for server_id in server_ids:
+                for role_name, priority, color, is_rgb, interval_ms in default_roles:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO server_roles (
+                            server_id, name, priority, color, is_rgb, rgb_interval_ms, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        server_id,
+                        role_name,
+                        priority,
+                        color,
+                        is_rgb,
+                        interval_ms,
+                        now_str
+                    ))
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_member_activity_server ON member_activity_logs(server_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_member_activity_created ON member_activity_logs(created_at);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_webhooks_server ON server_webhooks(server_id);")
@@ -1447,6 +1488,133 @@ class DatabaseManager:
             """, (server_id,))
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_server_roles(self, server_id: int) -> list:
+        """Returns role definitions ordered by priority."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, server_id, name, priority, color, is_rgb, rgb_interval_ms, created_at
+                FROM server_roles
+                WHERE server_id = ?
+                ORDER BY priority DESC, name COLLATE NOCASE ASC
+            """, (server_id,))
+            result = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                item["is_rgb"] = bool(item["is_rgb"])
+                result.append(item)
+            return result
+
+    def update_role_color(
+        self,
+        server_id: int,
+        role_name: str,
+        color: str
+    ) -> tuple:
+        """Updates a role's hex nickname color."""
+        role_name = role_name.strip().lower()
+        color = color.strip()
+        if len(color) != 7 or not color.startswith("#"):
+            return False, "Kolor musi mieć format HEX, np. #5865f2."
+        try:
+            int(color[1:], 16)
+        except ValueError:
+            return False, "Kolor musi mieć format HEX, np. #5865f2."
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE server_roles SET color = ?
+                WHERE server_id = ? AND name = ?
+            """, (color.lower(), server_id, role_name))
+            conn.commit()
+            if cursor.rowcount == 0:
+                return False, "Nie znaleziono roli serwera."
+            return True, {
+                "server_id": server_id,
+                "name": role_name,
+                "color": color.lower()
+            }
+
+    def toggle_role_rgb(
+        self,
+        server_id: int,
+        role_name: str,
+        is_rgb: bool,
+        rgb_interval_ms: int = 5000
+    ) -> tuple:
+        """Toggles RGB mode for a role with a supported interval."""
+        role_name = role_name.strip().lower()
+        if rgb_interval_ms not in (5000, 10000):
+            return False, "Interwał RGB musi wynosić 5000 lub 10000 ms."
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE server_roles
+                SET is_rgb = ?, rgb_interval_ms = ?
+                WHERE server_id = ? AND name = ?
+            """, (
+                1 if is_rgb else 0,
+                rgb_interval_ms,
+                server_id,
+                role_name
+            ))
+            conn.commit()
+            if cursor.rowcount == 0:
+                return False, "Nie znaleziono roli serwera."
+            return True, {
+                "server_id": server_id,
+                "name": role_name,
+                "is_rgb": bool(is_rgb),
+                "rgb_interval_ms": rgb_interval_ms
+            }
+
+    def resolve_nickname_color(
+        self,
+        server_id: Optional[int],
+        user_name: str
+    ) -> Dict[str, Any]:
+        """Resolves nickname color and RGB settings from the highest-priority role."""
+        user_name = user_name.strip()
+        if server_id is None:
+            return {
+                "color": "#b5bac1",
+                "is_rgb": False,
+                "rgb_interval_ms": 5000,
+                "role": "member",
+                "priority": 10
+            }
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT sm.role
+                FROM server_members sm
+                JOIN users u ON u.id = sm.user_id
+                WHERE sm.server_id = ? AND (u.username = ? OR u.email = ?)
+            """, (server_id, user_name, user_name))
+            row = cursor.fetchone()
+            role_name = row["role"] if row else "member"
+            cursor.execute("""
+                SELECT name, priority, color, is_rgb, rgb_interval_ms
+                FROM server_roles
+                WHERE server_id = ? AND name = ?
+            """, (server_id, role_name))
+            role = cursor.fetchone()
+            if not role:
+                return {
+                    "color": "#b5bac1",
+                    "is_rgb": False,
+                    "rgb_interval_ms": 5000,
+                    "role": "member",
+                    "priority": 10
+                }
+            return {
+                "color": role["color"],
+                "is_rgb": bool(role["is_rgb"]),
+                "rgb_interval_ms": role["rgb_interval_ms"],
+                "role": role["name"],
+                "priority": role["priority"]
+            }
+
     def toggle_channel_bookmark(
         self,
         channel_id: int,
@@ -1672,6 +1840,28 @@ class DatabaseManager:
                     VALUES (?, ?, ?, ?)
                 """, (name, icon, owner_id, now_str))
                 server_id = cursor.lastrowid
+                new_roles = [
+                    ("owner", 100, "#f23f43", 0, 5000),
+                    ("rgb", 95, "#5865f2", 1, 5000),
+                    ("admin", 80, "#5865f2", 0, 5000),
+                    ("moderator", 60, "#23a55a", 0, 5000),
+                    ("member", 10, "#b5bac1", 0, 5000),
+                ]
+                for role_name, priority, color, is_rgb, interval_ms in new_roles:
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO server_roles (
+                            server_id, name, priority, color, is_rgb, rgb_interval_ms, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        server_id,
+                        role_name,
+                        priority,
+                        color,
+                        is_rgb,
+                        interval_ms,
+                        now_str
+                    ))
 
                 # Domyślny kanał ogólny
                 cursor.execute("""

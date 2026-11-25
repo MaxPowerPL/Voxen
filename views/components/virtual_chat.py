@@ -40,6 +40,7 @@ class ChatMessageDTO:
     reactions: list = field(default_factory=list)
     is_pinned: bool = False
     reply_context: dict | None = None
+    nickname_color: str = ""
 
     def __post_init__(self):
         if not self.timestamp:
@@ -311,9 +312,9 @@ class PooledMessageWidget(ctk.CTkFrame):
             fg_color=Colors.BUTTON_SECONDARY if message.is_own else Colors.BG_MAIN
         )
 
-        sender_color = Colors.BUTTON_PRIMARY if message.is_own else (
+        sender_color = message.nickname_color or (Colors.BUTTON_PRIMARY if message.is_own else (
             Colors.ICON_COLOR if message.is_bot or "Bot" in message.sender else Colors.TEXT_PRIMARY
-        )
+        ))
         self.sender_label.configure(
             text=message.sender,
             text_color=sender_color
@@ -481,7 +482,8 @@ class VirtualChatView(ctk.CTkFrame):
         is_bot: bool = False,
         attachments: Optional[list] = None,
         reactions: Optional[list] = None,
-        message_id: Optional[int] = None
+        message_id: Optional[int] = None,
+        nickname_color: str = ""
     ) -> None:
         """
         Dodaje nową wiadomość do wirtualnej historii czatu.
@@ -500,7 +502,8 @@ class VirtualChatView(ctk.CTkFrame):
             is_bot=is_bot,
             calculated_height=h,
             attachments=attachments or [],
-            reactions=reactions or []
+            reactions=reactions or [],
+            nickname_color=nickname_color
         )
 
         self.messages.append(dto)
@@ -541,7 +544,8 @@ class VirtualChatView(ctk.CTkFrame):
                 calculated_height=h,
                 attachments=attachments,
                 reactions=reactions,
-                is_pinned=item.get("is_pinned", False)
+                is_pinned=item.get("is_pinned", False),
+                nickname_color=item.get("nickname_color", "")
             )
             self.messages.append(dto)
             self.offsets.append(self.offsets[-1] + h)

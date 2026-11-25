@@ -131,6 +131,37 @@ class ServerModel:
         """Gets a member role in a server."""
         return self.db.get_server_member_role(server_id, user_id)
 
+    def get_roles(self, server_id: int) -> list:
+        """Gets role definitions for a server."""
+        return self.db.get_server_roles(server_id)
+
+    def update_role_color(self, server_id: int, role_name: str, color: str) -> tuple:
+        """Updates a role nickname color."""
+        return self.db.update_role_color(server_id, role_name, color)
+
+    def toggle_role_rgb(
+        self,
+        server_id: int,
+        role_name: str,
+        is_rgb: bool,
+        rgb_interval_ms: int = 5000
+    ) -> tuple:
+        """Toggles RGB nickname mode for a role."""
+        return self.db.toggle_role_rgb(
+            server_id,
+            role_name,
+            is_rgb,
+            rgb_interval_ms
+        )
+
+    def resolve_nickname_color(
+        self,
+        server_id: Optional[int],
+        user_name: str
+    ) -> Dict[str, Any]:
+        """Resolves nickname color and RGB settings."""
+        return self.db.resolve_nickname_color(server_id, user_name)
+
     def get_members(self, server_id: int) -> list:
         """Gets server membership records."""
         return self.db.get_server_members(server_id)

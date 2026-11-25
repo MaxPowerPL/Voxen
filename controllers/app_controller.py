@@ -13,7 +13,7 @@ from network.connection import ConnectionState
 from network.protocol import Packet, PacketType
 from notifications.notifier import WindowsNotifier
 from storage.file_manager import FileManager
-from utils import Colors
+from utils import Colors, RGB_ROLE_COLORS
 
 
 class AppController:
@@ -62,6 +62,10 @@ class AppController:
         self._last_typing_sent: float = 0.0
         self._typing_stop_timer = None
         self.reply_to_message_id: Optional[int] = None
+        self._rgb_timer_id = None
+        self._rgb_index = 0
+        self._rgb_interval_ms = 5000
+        self._rgb_active = False
 
         # Natywny system powiadomień Windows i in-app toast
         self.notifier = WindowsNotifier()
@@ -72,6 +76,7 @@ class AppController:
         # Ustaw początkowy status w UI
         if hasattr(self.view, "update_my_status"):
             self.view.update_my_status(self.my_status, self.my_custom_status)
+        self._refresh_role_rgb_scheduler()
 
         # Podłączenie silnika sieciowego
         self.network = getattr(app, "network_client", None)
@@ -90,6 +95,66 @@ class AppController:
 
         # Uruchomienie cyklicznego sprawdzania wygasania wskaźników pisania (auto-decay)
         self._schedule_typing_decay()
+
+    def _cancel_rgb_cycler(self) -> None:
+        """Cancels the Tkinter RGB timer without touching the database."""
+        if self._rgb_timer_id is not None and hasattr(self.view, "after_cancel"):
+            try:
+                self.view.after_cancel(self._rgb_timer_id)
+            except Exception:
+                pass
+        self._rgb_timer_id = None
+        self._rgb_active = False
+
+    def _apply_rgb_color(self, color: str) -> None:
+        """Updates only currently visible nickname labels."""
+        try:
+            if hasattr(self.view, "my_username"):
+                self.view.my_username.configure(text_color=color)
+
+            if hasattr(self.view, "conversation_name_widgets"):
+                for label in self.view.conversation_name_widgets.values():
+                    if label.winfo_ismapped():
+                        label.configure(text_color=color)
+
+            if hasattr(self.view, "virtual_chat"):
+                for widget in self.view.virtual_chat.pool:
+                    if widget.winfo_ismapped():
+                        widget.sender_label.configure(text_color=color)
+        except Exception:
+            pass
+
+    def _on_rgb_tick(self) -> None:
+        """Non-blocking RGB palette tick using Tkinter's event loop."""
+        if not self._rgb_active:
+            return
+        self._rgb_index = (self._rgb_index + 1) % len(RGB_ROLE_COLORS)
+        self._apply_rgb_color(RGB_ROLE_COLORS[self._rgb_index])
+        if hasattr(self.view, "after"):
+            self._rgb_timer_id = self.view.after(
+                self._rgb_interval_ms,
+                self._on_rgb_tick
+            )
+
+    def _refresh_role_rgb_scheduler(self) -> None:
+        """Starts or stops RGB cycling from resolved role settings."""
+        self._cancel_rgb_cycler()
+        uid = self.current_user.get("id") or self.sender_name
+        role_config = self.server_model.resolve_nickname_color(
+            self.current_server_id,
+            self.sender_name
+        )
+        if role_config.get("is_rgb"):
+            self._rgb_active = True
+            self._rgb_index = 0
+            self._rgb_interval_ms = role_config.get("rgb_interval_ms", 5000)
+            if hasattr(self.view, "after"):
+                self._rgb_timer_id = self.view.after(
+                    self._rgb_interval_ms,
+                    self._on_rgb_tick
+                )
+        else:
+            self._apply_rgb_color(role_config.get("color", "#b5bac1"))
 
     def _schedule_typing_decay(self):
         """Okresowo sprawdza i usuwa przedawnione wskaźniki pisania"""
@@ -197,6 +262,12 @@ class AppController:
             current_user=self.sender_name,
             limit=200
         )
+        for message in history:
+            role_config = self.server_model.resolve_nickname_color(
+                self.current_server_id,
+                message.get("sender", "")
+            )
+            message["nickname_color"] = role_config.get("color", "")
         if history:
             self.view.load_message_history(history)
         else:
@@ -241,13 +312,18 @@ class AppController:
         # 2. Wyświetl w UI jeśli dotyczy otwartej konwersacji, w przeciwnym razie wyślij powiadomienie
         if is_active:
             is_bot = "bot" in sender.lower()
+            role_config = self.server_model.resolve_nickname_color(
+                self.current_server_id,
+                sender
+            )
             self.view.add_message(
                 sender=sender,
                 text=content,
                 is_own=False,
                 is_bot=is_bot,
                 attachments=attachments,
-                message_id=message_id
+                message_id=message_id,
+                nickname_color=role_config.get("color", "")
             )
         else:
             # Powiadomienie Windows Toast & In-App
@@ -354,6 +430,7 @@ class AppController:
             self.current_server_id = None
             self.current_channel = None
             self.current_voice_channel = None
+            self._refresh_role_rgb_scheduler()
             self.view.show_dms_sidebar()
             self.handle_conversation_click("Unity Bot")
             return
@@ -361,6 +438,7 @@ class AppController:
         print(f"Wybrano serwer: {server_name} (ID: {server_id})")
         self.current_server = server_name
         self.current_server_id = server_id
+        self._refresh_role_rgb_scheduler()
 
         # Pobierz kanały dla serwera z SQLite
         uid = self.current_user.get("id", 1)
@@ -504,6 +582,59 @@ class AppController:
         analytics = self.server_model.get_analytics(server_id)
         if hasattr(self.view, "show_server_analytics_modal"):
             self.view.show_server_analytics_modal(analytics)
+
+    def handle_role_settings_click(self) -> None:
+        """Opens the role color, RGB and assignment editor."""
+        if not self.current_server_id:
+            return
+        actor_id = self.current_user.get("id", 1)
+        if not self.server_model.can_manage(self.current_server_id, actor_id):
+            return
+        roles = self.server_model.get_roles(self.current_server_id)
+        members = self.server_model.get_members(self.current_server_id)
+
+        def update_color(role_name: str, color: str) -> None:
+            success, result = self.server_model.update_role_color(
+                self.current_server_id,
+                role_name,
+                color
+            )
+            if not success and hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast("Kolor roli", str(result))
+            self._refresh_role_rgb_scheduler()
+
+        def toggle_rgb(role_name: str, is_rgb: bool, interval_ms: int) -> None:
+            success, result = self.server_model.toggle_role_rgb(
+                self.current_server_id,
+                role_name,
+                is_rgb,
+                interval_ms
+            )
+            if not success and hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast("RGB roli", str(result))
+            self._refresh_role_rgb_scheduler()
+
+        def assign_role(user_id: Optional[int], role_name: str) -> None:
+            if user_id is None:
+                return
+            success, result = self.server_model.set_member_role(
+                self.current_server_id,
+                user_id,
+                role_name,
+                actor_id
+            )
+            if not success and hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast("Rola członka", str(result))
+            self._refresh_role_rgb_scheduler()
+
+        if hasattr(self.view, "show_role_settings_modal"):
+            self.view.show_role_settings_modal(
+                roles=roles,
+                members=members,
+                color_callback=update_color,
+                rgb_callback=toggle_rgb,
+                assign_callback=assign_role
+            )
 
     def handle_manage_members_click(self, server_id: int) -> None:
         """Opens server membership management for Owner/Admin users."""
@@ -746,12 +877,17 @@ class AppController:
 
         # 3. Wyświetl natychmiast własną wiadomość w wirtualnym czacie
         reactions = self.db.get_message_reactions(message_id) if message_id and self.db else []
+        role_config = self.server_model.resolve_nickname_color(
+            self.current_server_id,
+            self.sender_name
+        )
         self.view.add_message(
             sender=self.sender_name,
             text=message,
             is_own=True,
             reactions=reactions,
-            message_id=message_id
+            message_id=message_id,
+            nickname_color=role_config.get("color", "")
         )
 
         # 4. Wyślij asynchronicznie przez Network Engine do sieci
@@ -996,6 +1132,7 @@ class AppController:
 
     def handle_settings_click(self):
         """Obsługuje wylogowanie i powrót do ekranu logowania"""
+        self._cancel_rgb_cycler()
         print("Wylogowywanie użytkownika i unieważnianie sesji...")
         from models.auth_model import AuthModel
         AuthModel().logout()

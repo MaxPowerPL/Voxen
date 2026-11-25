@@ -482,6 +482,9 @@ class AppView(ctk.CTkFrame):
             anchor="w"
         )
         name_label.pack(anchor="w")
+        if not hasattr(self, "conversation_name_widgets"):
+            self.conversation_name_widgets = {}
+        self.conversation_name_widgets[name] = name_label
 
         # Status z kolorową kropką
         status_container = ctk.CTkFrame(text_container, fg_color="transparent")
@@ -1126,6 +1129,21 @@ class AppView(ctk.CTkFrame):
             self.add_channel_button.configure(state="normal" if can_manage else "disabled")
         if hasattr(self, "manage_members_button"):
             self.manage_members_button.configure(state="normal" if can_manage else "disabled")
+        if can_manage and hasattr(self, "channels_header"):
+            if not hasattr(self, "role_settings_button"):
+                self.role_settings_button = ctk.CTkButton(
+                    self.channels_header,
+                    text="🎨",
+                    width=36,
+                    height=32,
+                    fg_color="transparent",
+                    hover_color=Colors.BG_MAIN,
+                    command=lambda: self.controller.handle_role_settings_click()
+                )
+                self.role_settings_button.pack(side="right", padx=(0, 2))
+            self.role_settings_button.configure(state="normal")
+        elif hasattr(self, "role_settings_button"):
+            self.role_settings_button.configure(state="disabled")
         if hasattr(self, "virtual_chat"):
             can_moderate = role in ("owner", "admin", "moderator")
             self.virtual_chat.set_moderation_callback(
@@ -1442,6 +1460,136 @@ class AppView(ctk.CTkFrame):
         ctk.CTkButton(btn_box, text="Utwórz", fg_color=Colors.BUTTON_PRIMARY, hover_color=Colors.BUTTON_PRIMARY_HOVER, width=120, command=_submit).pack(side="right")
         name_entry.bind("<Return>", lambda e: _submit())
 
+    def show_role_settings_modal(
+        self,
+        roles: list,
+        members: list,
+        color_callback,
+        rgb_callback,
+        assign_callback
+    ) -> None:
+        """Opens the role color, RGB and assignment editor."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Ustawienia ról i kolorów")
+        dialog.geometry("560x520")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text="🎨 Role i kolory nicków",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(16, 10))
+
+        swatches = [
+            "#ff3333", "#5865f2", "#23a55a", "#f0b232",
+            "#a855f7", "#d946ef", "#00d9ff", "#b5bac1"
+        ]
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=300)
+        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+
+        for role in roles:
+            row = ctk.CTkFrame(scroll, fg_color=Colors.BG_RIGHT, corner_radius=8)
+            row.pack(fill="x", pady=4)
+            ctk.CTkLabel(
+                row,
+                text=f"{role['name']}  •  priorytet {role['priority']}",
+                text_color=role["color"],
+                font=Fonts.LABEL,
+                anchor="w"
+            ).pack(side="left", padx=10, fill="x", expand=True)
+
+            for swatch in swatches:
+                ctk.CTkButton(
+                    row,
+                    text="",
+                    width=24,
+                    height=24,
+                    fg_color=swatch,
+                    hover_color=swatch,
+                    border_width=0,
+                    command=lambda c=swatch, r=role["name"]: color_callback(r, c)
+                ).pack(side="left", padx=1)
+
+            hex_var = ctk.StringVar(value=role["color"])
+            ctk.CTkEntry(
+                row,
+                textvariable=hex_var,
+                width=76,
+                height=28
+            ).pack(side="left", padx=4)
+            ctk.CTkButton(
+                row,
+                text="Zapisz",
+                width=62,
+                height=28,
+                command=lambda r=role["name"], v=hex_var: color_callback(r, v.get())
+            ).pack(side="left", padx=4)
+
+            interval_var = ctk.StringVar(
+                value=str(role["rgb_interval_ms"])
+            )
+            rgb_var = ctk.BooleanVar(value=role["is_rgb"])
+            ctk.CTkSwitch(
+                row,
+                text="RGB",
+                variable=rgb_var,
+                command=lambda r=role["name"], rv=rgb_var, iv=interval_var:
+                    rgb_callback(r, rv.get(), int(iv.get()))
+            ).pack(side="left", padx=5)
+            ctk.CTkComboBox(
+                row,
+                values=["5000", "10000"],
+                variable=interval_var,
+                state="readonly",
+                width=78,
+                height=28,
+                command=lambda value, r=role["name"], rv=rgb_var:
+                    rgb_callback(r, rv.get(), int(value))
+            ).pack(side="left", padx=4)
+
+        assign_frame = ctk.CTkFrame(dialog, fg_color=Colors.BG_RIGHT)
+        assign_frame.pack(fill="x", padx=20, pady=(0, 10))
+        member_names = {
+            f"{member['username']} ({member['email']})": member["user_id"]
+            for member in members
+        }
+        member_var = ctk.StringVar(value=next(iter(member_names), "Brak członków"))
+        role_var = ctk.StringVar(value="member")
+        ctk.CTkComboBox(
+            assign_frame,
+            values=list(member_names) or ["Brak członków"],
+            variable=member_var,
+            state="readonly",
+            width=230
+        ).pack(side="left", padx=8, pady=8)
+        ctk.CTkComboBox(
+            assign_frame,
+            values=["member", "moderator", "admin"],
+            variable=role_var,
+            state="readonly",
+            width=110
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            assign_frame,
+            text="Przypisz",
+            width=75,
+            command=lambda: assign_callback(
+                member_names.get(member_var.get()),
+                role_var.get()
+            )
+        ).pack(side="right", padx=8)
+
+        ctk.CTkButton(
+            dialog,
+            text="Zamknij",
+            fg_color="transparent",
+            width=100,
+            command=dialog.destroy
+        ).pack(pady=(0, 12))
+
     def show_manage_members_modal(
         self,
         server_name: str,
@@ -1727,7 +1875,8 @@ class AppView(ctk.CTkFrame):
         is_bot: bool = False,
         attachments: list | None = None,
         reactions: list | None = None,
-        message_id: int | None = None
+        message_id: int | None = None,
+        nickname_color: str = ""
     ):
         """Dodaje nową wiadomość do wirtualizowanego czatu (O(1))"""
         self.virtual_chat.add_message(
@@ -1738,7 +1887,8 @@ class AppView(ctk.CTkFrame):
             is_bot=is_bot or ("Bot" in sender),
             attachments=attachments,
             reactions=reactions,
-            message_id=message_id
+            message_id=message_id,
+            nickname_color=nickname_color
         )
 
     def load_message_history(self, messages_data: list):
