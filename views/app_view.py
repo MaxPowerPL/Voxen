@@ -493,6 +493,15 @@ class AppView(ctk.CTkFrame):
         if self.controller:
             self.controller.handle_search(query)
 
+    def _on_history_search(self, event=None):
+        """Delegates history search to the controller."""
+        if not self.controller:
+            return
+        query = self.history_search_entry.get()
+        sender = self.history_sender_entry.get()
+        timestamp = self.history_timestamp_entry.get()
+        self.controller.handle_history_search(query, sender=sender, timestamp=timestamp)
+
     def _create_user_panel(self):
         """Tworzy panel profilu użytkownika na dole kanałów z możliwością zmiany statusu"""
         self.user_panel = ctk.CTkFrame(
@@ -744,7 +753,43 @@ class AppView(ctk.CTkFrame):
             text_color=Colors.TEXT_PRIMARY,
             anchor="w"
         )
-        self.chat_title.pack(side="left", padx=16, fill="both", expand=True)
+        self.chat_title.pack(side="left", padx=(16, 8), fill="both", expand=True)
+
+        self.history_search_entry = ctk.CTkEntry(
+            chat_header,
+            placeholder_text="Szukaj w historii",
+            width=150,
+            height=30,
+            fg_color=Colors.BG_RIGHT,
+            border_width=0,
+            font=Fonts.INPUT
+        )
+        self.history_search_entry.pack(side="right", padx=(4, 4))
+        self.history_search_entry.bind("<KeyRelease>", self._on_history_search)
+
+        self.history_sender_entry = ctk.CTkEntry(
+            chat_header,
+            placeholder_text="Nadawca",
+            width=90,
+            height=30,
+            fg_color=Colors.BG_RIGHT,
+            border_width=0,
+            font=Fonts.INPUT
+        )
+        self.history_sender_entry.pack(side="right", padx=(4, 4))
+        self.history_sender_entry.bind("<KeyRelease>", self._on_history_search)
+
+        self.history_timestamp_entry = ctk.CTkEntry(
+            chat_header,
+            placeholder_text="Czas HH:MM",
+            width=90,
+            height=30,
+            fg_color=Colors.BG_RIGHT,
+            border_width=0,
+            font=Fonts.INPUT
+        )
+        self.history_timestamp_entry.pack(side="right", padx=(4, 4))
+        self.history_timestamp_entry.bind("<KeyRelease>", self._on_history_search)
 
         # Wskaźnik stanu sieci i latencji (Discord-like connection badge)
         self.net_status_label = ctk.CTkLabel(
@@ -1204,6 +1249,15 @@ class AppView(ctk.CTkFrame):
     def clear_chat_messages(self):
         """Czyści widok wiadomości"""
         self.virtual_chat.clear()
+
+    def clear_history_search(self):
+        """Clears all history-search fields."""
+        if hasattr(self, "history_search_entry"):
+            self.history_search_entry.delete(0, "end")
+        if hasattr(self, "history_sender_entry"):
+            self.history_sender_entry.delete(0, "end")
+        if hasattr(self, "history_timestamp_entry"):
+            self.history_timestamp_entry.delete(0, "end")
 
     def set_typing_indicator(self, text: str):
         """Ustawia sformatowany tekst wskaźnika pisania wielu użytkowników"""

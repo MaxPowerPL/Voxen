@@ -58,6 +58,44 @@ class ChatModel:
             limit=limit
         )
 
+    def search_history(
+        self,
+        conversation: str,
+        current_user: str,
+        query: str = "",
+        sender: str = "",
+        timestamp: str = "",
+        limit: int = 200
+    ) -> List[Dict[str, Any]]:
+        """Searches messages in the selected DM or channel."""
+        return self.db.search_messages(
+            conversation=conversation,
+            current_user=current_user,
+            query=query,
+            sender=sender,
+            timestamp=timestamp,
+            limit=limit
+        )
+
+    def search_messages(
+        self,
+        conversation: str,
+        current_user: str,
+        query: str = "",
+        sender: str = "",
+        timestamp: str = "",
+        limit: int = 200
+    ) -> List[Dict[str, Any]]:
+        """Alias for search_history."""
+        return self.search_history(
+            conversation=conversation,
+            current_user=current_user,
+            query=query,
+            sender=sender,
+            timestamp=timestamp,
+            limit=limit
+        )
+
     def clear_history(self, conversation: str, current_user: str) -> None:
         """Usuwa historię wiadomości danej konwersacji z bazy danych"""
         self.db.clear_conversation_history(

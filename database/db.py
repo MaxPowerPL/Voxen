@@ -558,6 +558,95 @@ class DatabaseManager:
                 result.append(row_dict)
             return result
 
+    def search_messages(
+        self,
+        conversation: str,
+        current_user: str,
+        query: str = "",
+        sender: str = "",
+        timestamp: str = "",
+        start_timestamp: Optional[str] = None,
+        end_timestamp: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        limit: int = 200
+    ) -> list:
+        """Searches a DM or channel by content, sender and timestamp."""
+        conv = conversation.strip()
+        user = current_user.strip()
+        search_query = query.strip()
+        sender_query = sender.strip()
+        timestamp_query = timestamp.strip() or start_timestamp or start_time or ""
+        end_query = end_timestamp or end_time or ""
+
+        conditions = [
+            "("
+            "(sender = ? AND target = ?) "
+            "OR (sender = ? AND target = ?) "
+            "OR (target = ? AND is_dm = 0) "
+            "OR (target = 'Direct Messages' AND (sender = ? OR target = ?)) "
+            "OR (sender = ? AND target = 'Direct Messages')"
+            ")"
+        ]
+        params: list[Any] = [user, conv, conv, user, conv, conv, conv, conv]
+
+        if search_query:
+            conditions.append("(content LIKE ? COLLATE NOCASE)")
+            params.append(f"%{search_query}%")
+        if sender_query:
+            conditions.append("(sender LIKE ? COLLATE NOCASE)")
+            params.append(f"%{sender_query}%")
+        if timestamp_query:
+            conditions.append("(timestamp LIKE ? OR created_at LIKE ?)")
+            params.extend([f"%{timestamp_query}%", f"%{timestamp_query}%"])
+        if end_query:
+            conditions.append("(created_at <= ?)")
+            params.append(end_query)
+
+        sql = """
+            SELECT id, packet_id, sender, target, content, timestamp, is_dm, created_at
+            FROM messages
+            WHERE {where}
+            ORDER BY id ASC
+            LIMIT ?
+        """.format(where=" AND ".join(conditions))
+        params.append(max(1, int(limit)))
+
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            result = []
+            for row in cursor.fetchall():
+                row_dict = dict(row)
+                row_dict["is_own"] = row_dict["sender"].lower() == user.lower()
+                row_dict["is_bot"] = "bot" in row_dict["sender"].lower()
+                cursor.execute(
+                    "SELECT * FROM attachments WHERE message_id = ? ORDER BY id ASC",
+                    (row_dict["id"],)
+                )
+                row_dict["attachments"] = [dict(att) for att in cursor.fetchall()]
+                result.append(row_dict)
+            return result
+
+    def search_conversation_history(
+        self,
+        conversation: str,
+        current_user: str,
+        query: str = "",
+        sender: str = "",
+        timestamp: str = "",
+        limit: int = 200
+    ) -> list:
+        """Alias for search_messages."""
+        return self.search_messages(
+            conversation=conversation,
+            current_user=current_user,
+            query=query,
+            sender=sender,
+            timestamp=timestamp,
+            limit=limit
+        )
+
     def clear_conversation_history(self, conversation: str, current_user: str) -> None:
         """Usuwa historię wiadomości dla danej pary rozmówców"""
         conv = conversation.strip()

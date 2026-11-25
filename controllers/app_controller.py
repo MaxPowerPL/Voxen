@@ -599,5 +599,44 @@ class AppController:
         self.app.show_login_screen()
 
     def handle_search(self, query):
-        """Obsługuje wyszukiwanie konwersacji"""
-        print(f"Wyszukiwanie: {query}")
+        """Obsługuje wyszukiwanie konwersacji po nazwie."""
+        query = query.strip().lower()
+        if not hasattr(self.view, "conversations_scroll"):
+            return
+        for widget in self.view.conversations_scroll.winfo_children():
+            for child in widget.winfo_children():
+                try:
+                    text = child.cget("text")
+                except Exception:
+                    continue
+                if isinstance(text, str) and (not query or query in text.lower()):
+                    widget.pack()
+                    break
+            else:
+                if query:
+                    widget.pack_forget()
+
+    def handle_history_search(self, query: str = "", sender: str = "", timestamp: str = ""):
+        """Filters the active conversation/channel history."""
+        query = query.strip()
+        sender = sender.strip()
+        timestamp = timestamp.strip()
+        if not query and not sender and not timestamp:
+            self._load_conversation_history(self.current_conversation)
+            return
+        history = self.chat_model.search_history(
+            conversation=self.current_conversation,
+            current_user=self.sender_name,
+            query=query,
+            sender=sender,
+            timestamp=timestamp,
+            limit=200
+        )
+        if history:
+            self.view.load_message_history(history)
+        else:
+            self.view.clear_chat_messages()
+
+    def search_history(self, query: str = "", sender: str = "", timestamp: str = ""):
+        """Alias for handle_history_search."""
+        self.handle_history_search(query=query, sender=sender, timestamp=timestamp)
