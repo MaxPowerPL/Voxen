@@ -94,6 +94,29 @@ class ServerModel:
         """Checks owner/admin/moderator message-moderation permission."""
         return self.db.can_moderate_server(server_id, user_id)
 
+    def join_voice_channel(
+        self,
+        channel_id: int,
+        user_name: str,
+        muted: bool = False,
+        deafened: bool = False
+    ) -> tuple:
+        """Joins a mock voice channel."""
+        return self.db.join_voice_channel(
+            channel_id,
+            user_name,
+            muted=muted,
+            deafened=deafened
+        )
+
+    def leave_voice_channel(self, channel_id: int, user_name: str) -> bool:
+        """Leaves a mock voice channel."""
+        return self.db.leave_voice_channel(channel_id, user_name)
+
+    def get_voice_participants(self, channel_id: int) -> list:
+        """Gets mock voice-channel participants."""
+        return self.db.get_voice_participants(channel_id)
+
     def get_available_users(self, server_id: int) -> list:
         """Gets users that can be added to a server."""
         return self.db.get_available_server_users(server_id)

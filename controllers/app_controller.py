@@ -36,6 +36,7 @@ class AppController:
         self.current_server = "Direct Messages"
         self.current_server_id: Optional[int] = None
         self.current_channel: Optional[str] = None
+        self.current_voice_channel: Optional[int] = None
         self.current_conversation = "Unity Bot"
         self.current_tab = "Znajomi"
 
@@ -351,6 +352,7 @@ class AppController:
             self.current_server = "Direct Messages"
             self.current_server_id = None
             self.current_channel = None
+            self.current_voice_channel = None
             self.view.show_dms_sidebar()
             self.handle_conversation_click("Unity Bot")
             return
@@ -385,9 +387,26 @@ class AppController:
             self.view.update_chat_title(f"📁 {server_name}")
             self.view.clear_chat_messages()
 
-    def handle_channel_click(self, server_id: int, channel_name: str, topic: str = ""):
+    def handle_channel_click(
+        self,
+        server_id: int,
+        channel_name: str,
+        topic: str = "",
+        channel_type: str = "text"
+    ):
         """Obsługuje kliknięcie kanału tekstowego na serwerze"""
         self.handle_user_stop_typing()
+        if channel_type == "voice":
+            channel = next(
+                (
+                    item for item in self.server_model.get_channels(server_id)
+                    if item["name"] == channel_name
+                ),
+                None
+            )
+            if channel:
+                self.handle_voice_channel_join(channel["id"], channel_name)
+            return
         self.current_channel = channel_name
         channel_key = f"{self.current_server}#{channel_name}"
         self.current_conversation = channel_key
@@ -399,6 +418,60 @@ class AppController:
         self.chat_model.mark_as_read(channel_key, self.sender_name)
         self._load_conversation_history(channel_key)
         self._update_all_badges()
+
+    def handle_voice_channel_join(
+        self,
+        channel_id: int,
+        channel_name: str = ""
+    ) -> tuple:
+        """Joins the mock voice-channel state."""
+        if self.current_voice_channel and self.current_voice_channel != channel_id:
+            self.handle_voice_channel_leave()
+        success, result = self.server_model.join_voice_channel(
+            channel_id,
+            self.sender_name
+        )
+        if success:
+            self.current_voice_channel = channel_id
+            self.current_channel = None
+            title = f"🔊 {channel_name or 'Kanał głosowy'}"
+            self.view.update_chat_title(title)
+            self.view.clear_chat_messages()
+            if hasattr(self.view, "show_voice_status"):
+                participants = self.server_model.get_voice_participants(channel_id)
+                self.view.show_voice_status(channel_name or "Kanał głosowy", participants)
+        return success, result
+
+    def handle_voice_channel_leave(self) -> bool:
+        """Leaves the active mock voice channel."""
+        if not self.current_voice_channel:
+            return False
+        removed = self.server_model.leave_voice_channel(
+            self.current_voice_channel,
+            self.sender_name
+        )
+        if removed:
+            self.current_voice_channel = None
+            if hasattr(self.view, "clear_voice_status"):
+                self.view.clear_voice_status()
+        return removed
+
+    def handle_voice_mute_toggle(self) -> tuple:
+        """Toggles the local mock mute state."""
+        if not self.current_voice_channel:
+            return False, "Nie jesteś połączony z kanałem głosowym."
+        participants = self.server_model.get_voice_participants(self.current_voice_channel)
+        participant = next(
+            (item for item in participants if item["user_name"].lower() == self.sender_name.lower()),
+            None
+        )
+        muted = not bool(participant["muted"]) if participant else True
+        return self.server_model.join_voice_channel(
+            self.current_voice_channel,
+            self.sender_name,
+            muted=muted,
+            deafened=bool(participant["deafened"]) if participant else False
+        )
 
     def handle_add_server_click(self):
         """Otwiera okno dialogowe tworzenia nowego serwera"""

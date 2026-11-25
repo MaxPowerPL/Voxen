@@ -213,10 +213,15 @@ class AppView(ctk.CTkFrame):
         if self.controller:
             self.controller.handle_add_server_click()
 
-    def _on_channel_click(self, server_id, channel_name, topic=""):
-        """Deleguje kliknięcie kanału tekstowego"""
+    def _on_channel_click(self, server_id, channel_name, topic="", channel_type="text"):
+        """Deleguje kliknięcie kanału tekstowego lub głosowego"""
         if self.controller:
-            self.controller.handle_channel_click(server_id, channel_name, topic)
+            self.controller.handle_channel_click(
+                server_id,
+                channel_name,
+                topic,
+                channel_type
+            )
 
     def _on_add_channel_click(self):
         """Deleguje kliknięcie przycisku dodania kanału"""
@@ -1087,13 +1092,15 @@ class AppView(ctk.CTkFrame):
         for ch in channels_list:
             ch_name = ch["name"]
             ch_topic = ch.get("topic", "")
+            ch_type = ch.get("channel_type", "text")
+            ch_icon = "🔊" if ch_type == "voice" else "#"
 
             ch_row = ctk.CTkFrame(self.channels_scroll, fg_color="transparent", height=34)
             ch_row.pack(fill="x", pady=2)
 
             btn = ctk.CTkButton(
                 ch_row,
-                text=f"#  {ch_name}",
+                text=f"{ch_icon}  {ch_name}",
                 anchor="w",
                 font=("Segoe UI", 13),
                 height=34,
@@ -1101,7 +1108,7 @@ class AppView(ctk.CTkFrame):
                 hover_color=Colors.BG_MAIN,
                 text_color=Colors.TEXT_SECONDARY,
                 corner_radius=6,
-                command=lambda cid=server_id, cname=ch_name, ctop=ch_topic: self._on_channel_click(cid, cname, ctop)
+                command=lambda cid=server_id, cname=ch_name, ctop=ch_topic, ctype=ch_type: self._on_channel_click(cid, cname, ctop, ctype)
             )
             btn.pack(side="left", fill="both", expand=True)
 
@@ -1701,6 +1708,59 @@ class AppView(ctk.CTkFrame):
             width=100,
             command=dialog.destroy
         ).pack(pady=(0, 12))
+
+    def show_voice_status(self, channel_name: str, participants: list) -> None:
+        """Shows mock voice-channel connection status."""
+        if not hasattr(self, "_voice_status_frame"):
+            self._voice_status_frame = ctk.CTkFrame(
+                self.channels_frame,
+                fg_color=Colors.BG_MAIN,
+                corner_radius=8
+            )
+        self._voice_status_frame.pack(fill="x", padx=12, pady=(0, 8), side="bottom")
+        for child in self._voice_status_frame.winfo_children():
+            child.destroy()
+
+        ctk.CTkLabel(
+            self._voice_status_frame,
+            text=f"🔊 Połączono: {channel_name}",
+            font=("Segoe UI", 11, "bold"),
+            text_color=Colors.ONLINE,
+            anchor="w"
+        ).pack(fill="x", padx=10, pady=(8, 2))
+
+        names = ", ".join(
+            f"{item['user_name']}{' 🔇' if item['muted'] else ''}"
+            for item in participants
+        ) or "Brak uczestników"
+        ctk.CTkLabel(
+            self._voice_status_frame,
+            text=names,
+            text_color=Colors.TEXT_SECONDARY,
+            anchor="w"
+        ).pack(fill="x", padx=10, pady=(0, 6))
+
+        actions = ctk.CTkFrame(self._voice_status_frame, fg_color="transparent")
+        actions.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkButton(
+            actions,
+            text="🎙",
+            width=44,
+            command=lambda: self.controller.handle_voice_mute_toggle()
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            actions,
+            text="Rozłącz",
+            width=90,
+            fg_color=Colors.DND,
+            hover_color=Colors.ERROR,
+            command=lambda: self.controller.handle_voice_channel_leave()
+        ).pack(side="right", padx=4)
+
+    def clear_voice_status(self) -> None:
+        """Clears mock voice-channel status."""
+        if hasattr(self, "_voice_status_frame") and self._voice_status_frame:
+            self._voice_status_frame.pack_forget()
 
     def clear_history_search(self):
         """Clears all history-search fields."""

@@ -145,6 +145,17 @@ class DatabaseManager:
                 );
             """)
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS voice_participants (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                    user_name TEXT NOT NULL COLLATE NOCASE,
+                    muted INTEGER DEFAULT 0,
+                    deafened INTEGER DEFAULT 0,
+                    connected_at TEXT NOT NULL,
+                    UNIQUE(channel_id, user_name)
+                );
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS channel_permissions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
@@ -229,6 +240,7 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(target, is_read);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pinned_messages_conversation ON pinned_messages(conversation);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_server ON channels(server_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_voice_participants_channel ON voice_participants(channel_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_channel_permissions_channel ON channel_permissions(channel_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_server ON server_members(server_id);")
@@ -1497,11 +1509,91 @@ class DatabaseManager:
                 """, (server_id, name, topic, channel_type, now_str))
                 channel_id = cursor.lastrowid
                 conn.commit()
-                return True, {"id": channel_id, "server_id": server_id, "name": name, "topic": topic}
+                return True, {
+                    "id": channel_id,
+                    "server_id": server_id,
+                    "name": name,
+                    "topic": topic,
+                    "channel_type": channel_type
+                }
         except sqlite3.IntegrityError:
             return False, "Taki kanał już istnieje na tym serwerze!"
         except Exception as e:
             return False, f"Błąd bazy danych: {e}"
+
+    def join_voice_channel(
+        self,
+        channel_id: int,
+        user_name: str,
+        muted: bool = False,
+        deafened: bool = False
+    ) -> tuple:
+        """Adds a mock voice participant to a voice channel."""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        user_name = user_name.strip()
+        if not user_name:
+            return False, "Nazwa użytkownika jest wymagana."
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, channel_type FROM channels WHERE id = ?
+            """, (channel_id,))
+            channel = cursor.fetchone()
+            if not channel:
+                return False, "Nie znaleziono kanału."
+            if channel["channel_type"] != "voice":
+                return False, "Kanał nie jest kanałem głosowym."
+            cursor.execute("""
+                INSERT INTO voice_participants (
+                    channel_id, user_name, muted, deafened, connected_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(channel_id, user_name) DO UPDATE SET
+                    muted = excluded.muted,
+                    deafened = excluded.deafened
+            """, (
+                channel_id,
+                user_name,
+                1 if muted else 0,
+                1 if deafened else 0,
+                now_str
+            ))
+            conn.commit()
+            return True, {
+                "channel_id": channel_id,
+                "user_name": user_name,
+                "muted": muted,
+                "deafened": deafened
+            }
+
+    def leave_voice_channel(self, channel_id: int, user_name: str) -> bool:
+        """Removes a mock voice participant from a channel."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM voice_participants
+                WHERE channel_id = ? AND user_name = ?
+            """, (channel_id, user_name.strip()))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_voice_participants(self, channel_id: int) -> list:
+        """Returns connected mock voice participants."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT channel_id, user_name, muted, deafened, connected_at
+                FROM voice_participants
+                WHERE channel_id = ?
+                ORDER BY connected_at ASC, id ASC
+            """, (channel_id,))
+            result = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                item["muted"] = bool(item["muted"])
+                item["deafened"] = bool(item["deafened"])
+                result.append(item)
+            return result
 
     def delete_channel(self, channel_id: int, actor_id: Optional[int] = None) -> bool:
         """Usuwa kanał z bazy danych"""
