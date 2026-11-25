@@ -135,6 +135,16 @@ class DatabaseManager:
                     UNIQUE(server_id, name)
                 );
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS channel_permissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL,
+                    permission TEXT NOT NULL,
+                    allowed INTEGER NOT NULL DEFAULT 1,
+                    UNIQUE(channel_id, role, permission)
+                );
+            """)
 
             # Server membership and role permissions
             cursor.execute("""
@@ -198,6 +208,7 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(target, is_read);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_server ON channels(server_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_channel_permissions_channel ON channel_permissions(channel_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_server ON server_members(server_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_user ON server_members(user_id);")
@@ -1115,6 +1126,88 @@ class DatabaseManager:
                 ORDER BY position ASC, id ASC
             """, (server_id,))
             return [dict(row) for row in cursor.fetchall()]
+
+    def set_channel_permission(
+        self,
+        channel_id: int,
+        role: str,
+        permission: str,
+        allowed: bool
+    ) -> tuple:
+        """Sets an allow or deny override for a role on a channel."""
+        role = role.strip().lower()
+        permission = permission.strip().lower()
+        if role not in ("owner", "admin", "moderator", "member"):
+            return False, "Nieznana rola kanału."
+        if permission not in ("view", "send", "manage"):
+            return False, "Nieznane uprawnienie kanału."
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM channels WHERE id = ?", (channel_id,))
+            if not cursor.fetchone():
+                return False, "Nie znaleziono kanału."
+            cursor.execute("""
+                INSERT INTO channel_permissions (channel_id, role, permission, allowed)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(channel_id, role, permission)
+                DO UPDATE SET allowed = excluded.allowed
+            """, (channel_id, role, permission, 1 if allowed else 0))
+            conn.commit()
+            return True, {
+                "channel_id": channel_id,
+                "role": role,
+                "permission": permission,
+                "allowed": bool(allowed)
+            }
+
+    def get_channel_permissions(self, channel_id: int) -> list:
+        """Returns all explicit permission overrides for a channel."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT role, permission, allowed
+                FROM channel_permissions
+                WHERE channel_id = ?
+                ORDER BY role ASC, permission ASC
+            """, (channel_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def can_access_channel(
+        self,
+        channel_id: int,
+        server_role: str,
+        permission: str = "view"
+    ) -> bool:
+        """Checks explicit channel overrides, then applies role inheritance."""
+        server_role = server_role.strip().lower()
+        permission = permission.strip().lower()
+        if server_role not in ("owner", "admin", "moderator", "member"):
+            return False
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT allowed FROM channel_permissions
+                WHERE channel_id = ? AND role = ? AND permission = ?
+            """, (channel_id, server_role, permission))
+            override = cursor.fetchone()
+            if override:
+                return bool(override["allowed"])
+
+        role_defaults = {
+            "owner": {"view": True, "send": True, "manage": True},
+            "admin": {"view": True, "send": True, "manage": True},
+            "moderator": {"view": True, "send": True, "manage": False},
+            "member": {"view": True, "send": True, "manage": False}
+        }
+        return role_defaults[server_role].get(permission, False)
+
+    def get_accessible_channels(self, server_id: int, server_role: str) -> list:
+        """Returns channels visible to a server role."""
+        accessible = []
+        for channel in self.get_channels(server_id):
+            if self.can_access_channel(channel["id"], server_role, "view"):
+                accessible.append(channel)
+        return accessible
 
     def create_channel(
         self,

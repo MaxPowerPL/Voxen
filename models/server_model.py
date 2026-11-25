@@ -105,3 +105,30 @@ class ServerModel:
     def get_member_timeout(self, server_id: int, user_id: int) -> Optional[Dict[str, Any]]:
         """Gets active timeout metadata for a member."""
         return self.db.get_member_timeout(server_id, user_id)
+
+    def set_channel_permission(
+        self,
+        channel_id: int,
+        role: str,
+        permission: str,
+        allowed: bool
+    ) -> tuple:
+        """Sets a channel permission override."""
+        return self.db.set_channel_permission(channel_id, role, permission, allowed)
+
+    def get_channel_permissions(self, channel_id: int) -> list:
+        """Gets channel permission overrides."""
+        return self.db.get_channel_permissions(channel_id)
+
+    def can_access_channel(
+        self,
+        channel_id: int,
+        server_role: str,
+        permission: str = "view"
+    ) -> bool:
+        """Checks channel access or action permission."""
+        return self.db.can_access_channel(channel_id, server_role, permission)
+
+    def get_accessible_channels(self, server_id: int, server_role: str) -> list:
+        """Gets channels visible to a server role."""
+        return self.db.get_accessible_channels(server_id, server_role)

@@ -360,7 +360,9 @@ class AppController:
         self.current_server_id = server_id
 
         # Pobierz kanały dla serwera z SQLite
-        channels = self.server_model.get_channels(server_id)
+        uid = self.current_user.get("id", 1)
+        role = self.server_model.get_member_role(server_id, uid)
+        channels = self.server_model.get_accessible_channels(server_id, role)
         self.view.show_server_channels(server_id, server_name, channels)
         uid = self.current_user.get("id", 1)
         role = self.server_model.get_member_role(server_id, uid)
@@ -586,6 +588,24 @@ class AppController:
         """Obsługuje wysyłanie wiadomości na czacie lub kanale"""
         if not message.strip():
             return
+        if self.current_channel and self.current_server_id:
+            uid = self.current_user.get("id", 1)
+            role = self.server_model.get_member_role(self.current_server_id, uid)
+            channel = next(
+                (
+                    item for item in self.server_model.get_channels(self.current_server_id)
+                    if item["name"] == self.current_channel
+                ),
+                None
+            )
+            if channel and not self.server_model.can_access_channel(
+                channel["id"],
+                role,
+                "send"
+            ):
+                if hasattr(self.view, "show_in_app_toast"):
+                    self.view.show_in_app_toast("Uprawnienia", "Nie masz uprawnień do wysyłania na tym kanale.")
+                return
 
         # Zakończ stan pisania po wysłaniu
         self.handle_user_stop_typing()
