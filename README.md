@@ -49,7 +49,7 @@ Voxen to nowoczesny komunikator instant messaging stworzony w Pythonie, inspirow
 
 Aplikacja wykorzystuje CustomTkinter do stworzenia eleganckiego, ciemnego interfejsu użytkownika z płynną animacją, dynamicznym skalowaniem obrazków oraz responsywnym layoutem przypominającym popularne komunikatory. Voxen obsługuje autentykację użytkowników z walidacją danych, zarządzanie kontaktami i serwerami, statusy online/offline oraz przygotowany jest pod rozbudowę o funkcje czatu w czasie rzeczywistym.
 
-### 🎯 Aktualna Wersja: `v0.0.3-alpha`
+### 🎯 Aktualna Wersja: `v0.0.4-alpha`
 Pierwsza publiczna wersja alfa zawiera kompletny system logowania z walidacją, główny interfejs z trzema kolumnami (serwery, kanały, czat), wsparcie dla statusów użytkownika oraz podstawową strukturę UI gotową pod implementację WebSocket dla komunikacji real-time. System jest w pełni funkcjonalny jako frontend z przykładowymi danymi.
 
 ---

@@ -331,6 +331,11 @@ class AppController:
         # Pobierz kanały dla serwera z SQLite
         channels = self.server_model.get_channels(server_id)
         self.view.show_server_channels(server_id, server_name, channels)
+        uid = self.current_user.get("id", 1)
+        role = self.server_model.get_member_role(server_id, uid)
+        can_manage = self.server_model.can_manage(server_id, uid)
+        if hasattr(self.view, "set_server_role_permissions"):
+            self.view.set_server_role_permissions(role, can_manage)
         self._update_all_badges()
 
         # Automatycznie wybierz pierwszy kanał (np. #ogólny)
@@ -382,6 +387,11 @@ class AppController:
 
     def handle_add_channel_click(self, server_id: int):
         """Otwiera okno dialogowe tworzenia kanału tekstowego"""
+        uid = self.current_user.get("id", 1)
+        if not self.server_model.can_manage(server_id, uid):
+            if hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast("Uprawnienia", "Tylko właściciel lub administrator może tworzyć kanały.")
+            return
         self.view.show_create_channel_modal(
             server_name=self.current_server,
             callback=lambda cname, ctopic: self._on_channel_created(server_id, cname, ctopic)
@@ -389,10 +399,12 @@ class AppController:
 
     def _on_channel_created(self, server_id: int, channel_name: str, topic: str):
         """Callback po utworzeniu nowego kanału"""
+        uid = self.current_user.get("id", 1)
         success, result = self.server_model.create_channel(
             server_id=server_id,
             name=channel_name,
-            topic=topic
+            topic=topic,
+            actor_id=uid
         )
         if success:
             print(f"Utworzono kanał #{channel_name} na serwerze {self.current_server}")

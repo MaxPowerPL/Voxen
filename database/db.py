@@ -136,6 +136,18 @@ class DatabaseManager:
                 );
             """)
 
+            # Server membership and role permissions
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS server_members (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    role TEXT NOT NULL DEFAULT 'member',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(server_id, user_id)
+                );
+            """)
+
             # Chat file and image attachments
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS attachments (
@@ -166,6 +178,8 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(target, is_read);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_channels_server ON channels(server_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_server ON server_members(server_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_user ON server_members(user_id);")
 
             conn.commit()
 
@@ -785,6 +799,12 @@ class DatabaseManager:
                             VALUES (?, ?, 1, ?)
                         """, (s_name, icon, now_str))
                         s_id = cursor.lastrowid
+                        cursor.execute("SELECT id FROM users WHERE id = 1")
+                        if cursor.fetchone():
+                            cursor.execute("""
+                                INSERT OR IGNORE INTO server_members (server_id, user_id, role, created_at)
+                                VALUES (?, 1, 'owner', ?)
+                            """, (s_id, now_str))
                         pos = 0
                         for c_name, topic in channels:
                             cursor.execute("""
@@ -802,6 +822,68 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("SELECT id, name, icon, owner_id, created_at FROM servers ORDER BY id ASC")
             return [dict(row) for row in cursor.fetchall()]
+
+    def set_server_member_role(self, server_id: int, user_id: int, role: str) -> tuple:
+        """Assigns owner, admin, moderator or member role to a server member."""
+        role = role.strip().lower()
+        if role not in ("owner", "admin", "moderator", "member"):
+            return False, "Nieznana rola serwera."
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with self._lock, self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO server_members (server_id, user_id, role, created_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(server_id, user_id) DO UPDATE SET role = excluded.role
+                """, (server_id, user_id, role, now_str))
+                conn.commit()
+                return True, {"server_id": server_id, "user_id": user_id, "role": role}
+        except Exception as exc:
+            return False, f"Błąd bazy danych: {exc}"
+
+    def get_server_member_role(self, server_id: int, user_id: int) -> str:
+        """Returns a member role, defaulting to member."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT role FROM server_members
+                WHERE server_id = ? AND user_id = ?
+            """, (server_id, user_id))
+            row = cursor.fetchone()
+            if row:
+                return row["role"]
+            cursor.execute("SELECT owner_id FROM servers WHERE id = ?", (server_id,))
+            server = cursor.fetchone()
+            if server and server["owner_id"] == user_id:
+                return "owner"
+            return "member"
+
+    def get_server_members(self, server_id: int) -> list:
+        """Returns server membership records."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT sm.user_id, sm.role, sm.created_at, u.username, u.email
+                FROM server_members sm
+                JOIN users u ON u.id = sm.user_id
+                WHERE sm.server_id = ?
+                ORDER BY CASE sm.role
+                    WHEN 'owner' THEN 1
+                    WHEN 'admin' THEN 2
+                    WHEN 'moderator' THEN 3
+                    ELSE 4
+                END, u.username ASC
+            """, (server_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def can_manage_server(self, server_id: int, user_id: int) -> bool:
+        """Owner and admin can manage server and channel structure."""
+        return self.get_server_member_role(server_id, user_id) in ("owner", "admin")
+
+    def can_moderate_server(self, server_id: int, user_id: int) -> bool:
+        """Owner, admin and moderator can moderate messages."""
+        return self.get_server_member_role(server_id, user_id) in ("owner", "admin", "moderator")
 
     def create_server(self, name: str, icon: str = "📁", owner_id: int = 1) -> tuple:
         """Tworzy nowy serwer i dodaje domyślny kanał #ogólny"""
@@ -824,6 +906,12 @@ class DatabaseManager:
                     INSERT INTO channels (server_id, name, topic, channel_type, position, created_at)
                     VALUES (?, 'ogólny', 'Główny kanał serwera', 'text', 0, ?)
                 """, (server_id, now_str))
+                cursor.execute("SELECT id FROM users WHERE id = ?", (owner_id,))
+                if cursor.fetchone():
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO server_members (server_id, user_id, role, created_at)
+                        VALUES (?, ?, 'owner', ?)
+                    """, (server_id, owner_id, now_str))
 
                 conn.commit()
                 return True, {"id": server_id, "name": name, "icon": icon}
@@ -832,8 +920,10 @@ class DatabaseManager:
         except Exception as e:
             return False, f"Błąd bazy danych: {e}"
 
-    def delete_server(self, server_id: int) -> bool:
+    def delete_server(self, server_id: int, actor_id: Optional[int] = None) -> bool:
         """Usuwa serwer wraz ze wszystkimi kanałami (CASCADE)"""
+        if actor_id is not None and not self.can_manage_server(server_id, actor_id):
+            return False
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM servers WHERE id = ?", (server_id,))
@@ -852,8 +942,17 @@ class DatabaseManager:
             """, (server_id,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def create_channel(self, server_id: int, name: str, topic: str = "", channel_type: str = "text") -> tuple:
+    def create_channel(
+        self,
+        server_id: int,
+        name: str,
+        topic: str = "",
+        channel_type: str = "text",
+        actor_id: Optional[int] = None
+    ) -> tuple:
         """Tworzy nowy kanał w serwerze"""
+        if actor_id is not None and not self.can_manage_server(server_id, actor_id):
+            return False, "Brak uprawnień do tworzenia kanałów."
         name = name.strip().lower().replace(" ", "-").replace("#", "")
         if not name:
             return False, "Nazwa kanału nie może być pusta!"
@@ -874,8 +973,29 @@ class DatabaseManager:
         except Exception as e:
             return False, f"Błąd bazy danych: {e}"
 
-    def delete_channel(self, channel_id: int) -> bool:
+    def delete_channel(self, channel_id: int, actor_id: Optional[int] = None) -> bool:
         """Usuwa kanał z bazy danych"""
+        if actor_id is not None:
+            server_role = None
+            with self._lock, self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT server_id FROM channels WHERE id = ?", (channel_id,))
+                channel = cursor.fetchone()
+                if channel:
+                    cursor.execute("""
+                        SELECT role FROM server_members
+                        WHERE server_id = ? AND user_id = ?
+                    """, (channel["server_id"], actor_id))
+                    role_row = cursor.fetchone()
+                    if role_row:
+                        server_role = role_row["role"]
+                    else:
+                        cursor.execute("SELECT owner_id FROM servers WHERE id = ?", (channel["server_id"],))
+                        server = cursor.fetchone()
+                        if server and server["owner_id"] == actor_id:
+                            server_role = "owner"
+            if server_role not in ("owner", "admin"):
+                return False
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM channels WHERE id = ?", (channel_id,))

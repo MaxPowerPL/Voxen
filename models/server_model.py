@@ -38,16 +38,38 @@ class ServerModel:
         server_id: int,
         name: str,
         topic: str = "",
-        channel_type: str = "text"
+        channel_type: str = "text",
+        actor_id: Optional[int] = None
     ) -> Tuple[bool, Dict[str, Any] | str]:
         """Tworzy nowy kanał tekstowy na serwerze"""
         return self.db.create_channel(
             server_id=server_id,
             name=name,
             topic=topic,
-            channel_type=channel_type
+            channel_type=channel_type,
+            actor_id=actor_id
         )
 
-    def delete_channel(self, channel_id: int) -> bool:
+    def delete_channel(self, channel_id: int, actor_id: Optional[int] = None) -> bool:
         """Usuwa kanał z serwera"""
-        return self.db.delete_channel(channel_id=channel_id)
+        return self.db.delete_channel(channel_id=channel_id, actor_id=actor_id)
+
+    def set_member_role(self, server_id: int, user_id: int, role: str) -> tuple:
+        """Assigns a role in a server."""
+        return self.db.set_server_member_role(server_id, user_id, role)
+
+    def get_member_role(self, server_id: int, user_id: int) -> str:
+        """Gets a member role in a server."""
+        return self.db.get_server_member_role(server_id, user_id)
+
+    def get_members(self, server_id: int) -> list:
+        """Gets server membership records."""
+        return self.db.get_server_members(server_id)
+
+    def can_manage(self, server_id: int, user_id: int) -> bool:
+        """Checks owner/admin channel-management permission."""
+        return self.db.can_manage_server(server_id, user_id)
+
+    def can_moderate(self, server_id: int, user_id: int) -> bool:
+        """Checks owner/admin/moderator message-moderation permission."""
+        return self.db.can_moderate_server(server_id, user_id)

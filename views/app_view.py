@@ -345,6 +345,7 @@ class AppView(ctk.CTkFrame):
             command=self._on_add_channel_click
         )
         add_channel_btn.pack(side="right")
+        self.add_channel_button = add_channel_btn
 
         self.channels_scroll = ctk.CTkScrollableFrame(
             self.server_channels_panel,
@@ -950,6 +951,21 @@ class AppView(ctk.CTkFrame):
                 parent_frame=self.dynamic_servers_frame
             )
             btn.pack(pady=4)
+
+    def set_server_role_permissions(self, role: str, can_manage: bool) -> None:
+        """Updates server-management controls for the current member role."""
+        if hasattr(self, "add_channel_button"):
+            self.add_channel_button.configure(state="normal" if can_manage else "disabled")
+        role_labels = {
+            "owner": "Właściciel",
+            "admin": "Administrator",
+            "moderator": "Moderator",
+            "member": "Członek"
+        }
+        if hasattr(self, "server_name_label"):
+            current = self.server_name_label.cget("text")
+            if " • " not in current:
+                self.server_name_label.configure(text=f"{current} • {role_labels.get(role, 'Członek')}")
 
     def show_server_channels(self, server_id: int, server_name: str, channels_list: list):
         """Przełącza środkowy panel na listę kanałów wybranego serwera"""
