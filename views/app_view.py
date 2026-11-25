@@ -919,6 +919,10 @@ class AppView(ctk.CTkFrame):
             controller: Instancja AppController
         """
         self.controller = controller
+        if hasattr(self, "virtual_chat"):
+            self.virtual_chat.set_reaction_callback(
+                lambda message_id, emoji: controller.handle_message_reaction(message_id, emoji)
+            )
 
     def update_channels_header(self, text):
         """Aktualizuje nagłówek sekcji kanałów"""
@@ -1246,7 +1250,9 @@ class AppView(ctk.CTkFrame):
         is_own: bool = False,
         timestamp: str = "",
         is_bot: bool = False,
-        attachments: list | None = None
+        attachments: list | None = None,
+        reactions: list | None = None,
+        message_id: int | None = None
     ):
         """Dodaje nową wiadomość do wirtualizowanego czatu (O(1))"""
         self.virtual_chat.add_message(
@@ -1255,7 +1261,9 @@ class AppView(ctk.CTkFrame):
             is_own=is_own,
             timestamp=timestamp,
             is_bot=is_bot or ("Bot" in sender),
-            attachments=attachments
+            attachments=attachments,
+            reactions=reactions,
+            message_id=message_id
         )
 
     def load_message_history(self, messages_data: list):
@@ -1265,6 +1273,42 @@ class AppView(ctk.CTkFrame):
     def clear_chat_messages(self):
         """Czyści widok wiadomości"""
         self.virtual_chat.clear()
+
+    def show_emoji_picker(self, callback) -> None:
+        """Shows a compact emoji picker and delegates the selected emoji."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Emoji")
+        dialog.geometry("300x170")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text="Wybierz emoji",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(12, 8))
+
+        frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        frame.pack(padx=12, pady=8)
+        emojis = ["😀", "😂", "😍", "👍", "👎", "🎉", "❤️", "🔥", "🚀", "🎮", "💻", "🎨"]
+
+        def _choose(emoji: str) -> None:
+            dialog.destroy()
+            callback(emoji)
+
+        for index, emoji in enumerate(emojis):
+            ctk.CTkButton(
+                frame,
+                text=emoji,
+                width=42,
+                height=36,
+                fg_color=Colors.BG_RIGHT,
+                hover_color=Colors.BUTTON_PRIMARY,
+                font=("Segoe UI", 17),
+                command=lambda e=emoji: _choose(e)
+            ).grid(row=index // 6, column=index % 6, padx=3, pady=3)
 
     def clear_history_search(self):
         """Clears all history-search fields."""

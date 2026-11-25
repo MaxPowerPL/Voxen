@@ -176,6 +176,12 @@ class MockWebSocketServer:
                 if client != sender_writer:
                     await self._send_packet(client, packet)
 
+        # 4b. Emoji reactions
+        elif packet.type == PacketType.REACTION_UPDATE:
+            for client in list(self.clients):
+                if client != sender_writer:
+                    await self._send_packet(client, packet)
+
         # 5. Wiadomość na czacie
         elif packet.type == PacketType.MESSAGE_SEND:
             sender = packet.payload.get("sender", "Anonim")

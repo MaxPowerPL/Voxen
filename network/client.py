@@ -374,6 +374,27 @@ class NetworkClient:
         packet = PacketFactory.status_update(user, status, custom_status)
         return self.send_packet(packet)
 
+    def send_reaction(
+        self,
+        message_id: int,
+        emoji: str,
+        user: str,
+        target: str,
+        is_dm: bool = True
+    ) -> bool:
+        """Sends a message reaction update."""
+        packet = Packet(
+            type=PacketType.REACTION_UPDATE,
+            payload={
+                "message_id": message_id,
+                "emoji": emoji,
+                "user": user,
+                "target": target,
+                "is_dm": is_dm
+            }
+        )
+        return self.send_packet(packet)
+
     def send_typing(self, user: str, target: str, is_typing: bool) -> bool:
         """Wysyła wskaźnik pisania"""
         packet = PacketFactory.typing(user, target, is_typing)

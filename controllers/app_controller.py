@@ -130,6 +130,7 @@ class AppController:
         self.network.on(PacketType.TYPING_STOP, self._on_network_typing_stop)
         self.network.on(PacketType.STATUS_UPDATE, self._on_network_status_update)
         self.network.on(PacketType.PRESENCE_CHANGE, self._on_network_status_update)
+        self.network.on(PacketType.REACTION_UPDATE, self._on_network_reaction)
         self.network.on_state_change(self._on_connection_state_change)
 
         # Ustaw początkowy stan
@@ -241,7 +242,8 @@ class AppController:
                 text=content,
                 is_own=False,
                 is_bot=is_bot,
-                attachments=attachments
+                attachments=attachments,
+                message_id=message_id
             )
         else:
             # Powiadomienie Windows Toast & In-App
@@ -253,6 +255,16 @@ class AppController:
 
             self.notifier.notify(title=notif_title, message=content)
             self._update_all_badges()
+
+    def _on_network_reaction(self, packet: Packet) -> None:
+        """Handles a reaction update received from the network."""
+        message_id = packet.payload.get("message_id")
+        emoji = packet.payload.get("emoji", "")
+        user = packet.payload.get("user", "")
+        if not message_id or not emoji or not self.db:
+            return
+        self.db.toggle_message_reaction(int(message_id), user, emoji)
+        self._load_conversation_history(self.current_conversation)
 
     def _on_network_typing_start(self, packet: Packet):
         """Obsługa wskaźnika rozpoczęcia pisania (Multi-User)"""
@@ -521,7 +533,7 @@ class AppController:
         self.view.clear_message_input()
 
         # 2. Trwały zapis w bazie SQLite
-        self.chat_model.save_message(
+        message_id = self.chat_model.save_message(
             sender=self.sender_name,
             target=target,
             content=message,
@@ -529,7 +541,14 @@ class AppController:
         )
 
         # 3. Wyświetl natychmiast własną wiadomość w wirtualnym czacie
-        self.view.add_message(sender=self.sender_name, text=message, is_own=True)
+        reactions = self.db.get_message_reactions(message_id) if message_id and self.db else []
+        self.view.add_message(
+            sender=self.sender_name,
+            text=message,
+            is_own=True,
+            reactions=reactions,
+            message_id=message_id
+        )
 
         # 4. Wyślij asynchronicznie przez Network Engine do sieci
         if self.network:
@@ -584,7 +603,8 @@ class AppController:
                 sender=self.sender_name,
                 text=f"Załącznik: {metadata['original_name']}",
                 is_own=True,
-                attachments=[metadata]
+                attachments=[metadata],
+                message_id=message_id
             )
 
             if self.network:
@@ -600,8 +620,34 @@ class AppController:
                 self.view.show_in_app_toast("Załącznik", str(exc))
 
     def handle_emoji_click(self):
-        """Obsługuje wybór emoji"""
-        print("Otwarto picker emoji")
+        """Opens the emoji picker and inserts the selected emoji."""
+        if hasattr(self.view, "show_emoji_picker"):
+            self.view.show_emoji_picker(self._insert_emoji)
+
+    def _insert_emoji(self, emoji: str) -> None:
+        if hasattr(self.view, "message_entry"):
+            current = self.view.message_entry.get()
+            self.view.message_entry.delete(0, "end")
+            self.view.message_entry.insert(0, f"{current}{emoji}")
+
+    def handle_message_reaction(self, message_id: str, emoji: str) -> None:
+        """Toggles a user's reaction and broadcasts it."""
+        try:
+            db_message_id = int(message_id)
+        except (TypeError, ValueError):
+            return
+        if not self.db:
+            return
+        self.db.toggle_message_reaction(db_message_id, self.sender_name, emoji)
+        self._load_conversation_history(self.current_conversation)
+        if self.network:
+            self.network.send_reaction(
+                message_id=db_message_id,
+                emoji=emoji,
+                user=self.sender_name,
+                target=self.current_conversation or "Direct Messages",
+                is_dm=self.current_channel is None
+            )
 
     def handle_settings_click(self):
         """Obsługuje wylogowanie i powrót do ekranu logowania"""

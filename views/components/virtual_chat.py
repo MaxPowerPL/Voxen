@@ -37,6 +37,7 @@ class ChatMessageDTO:
     avatar: str = "👤"
     calculated_height: int = 58
     attachments: list = field(default_factory=list)
+    reactions: list = field(default_factory=list)
 
     def __post_init__(self):
         if not self.timestamp:
@@ -113,6 +114,38 @@ class PooledMessageWidget(ctk.CTkFrame):
         )
         self.attachment_frame.pack(anchor="w", fill="x", pady=(4, 2))
         self._attachment_images = []
+        self.reaction_frame = ctk.CTkFrame(
+            self.content_frame,
+            fg_color="transparent"
+        )
+        self.reaction_frame.pack(anchor="w", fill="x", pady=(2, 2))
+        self._reaction_callback = None
+        self._message_id = None
+
+    def set_reaction_callback(self, callback: Callable[[str, str], None]) -> None:
+        self._reaction_callback = callback
+
+    def _render_reactions(self, message_id: str, reactions: list) -> None:
+        for widget in self.reaction_frame.winfo_children():
+            widget.destroy()
+        self._message_id = message_id
+        for reaction in reactions or []:
+            emoji = reaction.get("emoji", "")
+            count = reaction.get("count", 0)
+            button = ctk.CTkButton(
+                self.reaction_frame,
+                text=f"{emoji} {count}",
+                width=52,
+                height=24,
+                fg_color=Colors.BG_RIGHT,
+                hover_color=Colors.BUTTON_PRIMARY,
+                command=lambda e=emoji: self._on_reaction(e)
+            )
+            button.pack(side="left", padx=(0, 4), pady=2)
+
+    def _on_reaction(self, emoji: str) -> None:
+        if self._reaction_callback:
+            self._reaction_callback(str(self._message_id), emoji)
 
     def _open_attachment(self, file_path: str) -> None:
         path = Path(file_path)
@@ -201,6 +234,7 @@ class PooledMessageWidget(ctk.CTkFrame):
             wraplength=wrap_val
         )
         self._render_attachments(message.attachments)
+        self._render_reactions(message.id, message.reactions)
 
 
 class VirtualChatView(ctk.CTkFrame):
@@ -222,6 +256,7 @@ class VirtualChatView(ctk.CTkFrame):
         # Tablica sum prefiksowych wysokości dla bisekcji O(log N)
         self.offsets: List[int] = [0]
         self.total_height: int = 0
+        self.reaction_callback: Optional[Callable[[str, str], None]] = None
 
         # Stan widoku i przewijania
         self.viewport_height: int = 1
@@ -289,14 +324,27 @@ class VirtualChatView(ctk.CTkFrame):
 
         return self.BASE_PADDING + (lines * self.LINE_HEIGHT)
 
-    def _estimate_rendered_height(self, content: str, width: int, attachments: list | None = None) -> int:
+    def _estimate_rendered_height(
+        self,
+        content: str,
+        width: int,
+        attachments: list | None = None,
+        reactions: list | None = None
+    ) -> int:
         height = self._estimate_message_height(content, width)
         for attachment in attachments or []:
             if attachment.get("file_type") == "image" and attachment.get("thumbnail_path"):
                 height += 220
             else:
                 height += 64
+        if reactions:
+            height += 32
         return height
+
+    def set_reaction_callback(self, callback: Callable[[str, str], None]) -> None:
+        self.reaction_callback = callback
+        for widget in self.pool:
+            widget.set_reaction_callback(callback)
 
     def add_message(
         self,
@@ -305,7 +353,9 @@ class VirtualChatView(ctk.CTkFrame):
         is_own: bool = False,
         timestamp: Optional[str] = None,
         is_bot: bool = False,
-        attachments: Optional[list] = None
+        attachments: Optional[list] = None,
+        reactions: Optional[list] = None,
+        message_id: Optional[int] = None
     ) -> None:
         """
         Dodaje nową wiadomość do wirtualnej historii czatu.
@@ -314,16 +364,17 @@ class VirtualChatView(ctk.CTkFrame):
         if self.welcome_label and self.welcome_label.winfo_ismapped():
             self.welcome_label.place_forget()
 
-        h = self._estimate_rendered_height(content, self.viewport_width, attachments)
+        h = self._estimate_rendered_height(content, self.viewport_width, attachments, reactions)
         dto = ChatMessageDTO(
-            id=str(len(self.messages)),
+            id=str(message_id if message_id is not None else len(self.messages)),
             sender=sender,
             content=content,
             timestamp=timestamp or datetime.datetime.now().strftime("%H:%M"),
             is_own=is_own,
             is_bot=is_bot,
             calculated_height=h,
-            attachments=attachments or []
+            attachments=attachments or [],
+            reactions=reactions or []
         )
 
         self.messages.append(dto)
@@ -352,7 +403,8 @@ class VirtualChatView(ctk.CTkFrame):
         for item in messages_data:
             content = item.get("content", "")
             attachments = item.get("attachments", [])
-            h = self._estimate_rendered_height(content, self.viewport_width, attachments)
+            reactions = item.get("reactions", [])
+            h = self._estimate_rendered_height(content, self.viewport_width, attachments, reactions)
             dto = ChatMessageDTO(
                 id=str(item.get("id", len(self.messages))),
                 sender=item.get("sender", "User"),
@@ -361,7 +413,8 @@ class VirtualChatView(ctk.CTkFrame):
                 is_own=item.get("is_own", False),
                 is_bot=item.get("is_bot", False),
                 calculated_height=h,
-                attachments=attachments
+                attachments=attachments,
+                reactions=reactions
             )
             self.messages.append(dto)
             self.offsets.append(self.offsets[-1] + h)
@@ -436,7 +489,7 @@ class VirtualChatView(ctk.CTkFrame):
         if width_changed and self.messages:
             self.offsets = [0]
             for msg in self.messages:
-                h = self._estimate_rendered_height(msg.content, self.viewport_width, msg.attachments)
+                h = self._estimate_rendered_height(msg.content, self.viewport_width, msg.attachments, msg.reactions)
                 msg.calculated_height = h
                 self.offsets.append(self.offsets[-1] + h)
             self.total_height = self.offsets[-1]
@@ -472,6 +525,7 @@ class VirtualChatView(ctk.CTkFrame):
         # Dynamiczne powiększenie puli jeśli ekran pokazuje więcej elementów niż rozmiar puli
         while len(self.pool) < visible_count + 4:
             new_widget = PooledMessageWidget(self.canvas_container)
+            new_widget.set_reaction_callback(self.reaction_callback)
             self.bind_mousewheel(new_widget)
             self.bind_mousewheel(new_widget.content_frame)
             self.bind_mousewheel(new_widget.body_label)

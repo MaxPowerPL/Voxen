@@ -28,7 +28,7 @@ class DatabaseManager:
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = Path(db_path or self.DEFAULT_DB_PATH)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._init_db()
         self._migrate_from_json_if_needed()
         self._seed_initial_messages_if_empty()
@@ -168,6 +168,17 @@ class DatabaseManager:
             if "thumbnail_path" not in attachment_cols:
                 cursor.execute("ALTER TABLE attachments ADD COLUMN thumbnail_path TEXT;")
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS message_reactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    user_name TEXT NOT NULL COLLATE NOCASE,
+                    emoji TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(message_id, user_name, emoji)
+                );
+            """)
+
             # Indeksy
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);")
@@ -180,6 +191,7 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_server ON server_members(server_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_user ON server_members(user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions(message_id);")
 
             conn.commit()
 
@@ -569,6 +581,7 @@ class DatabaseManager:
                     (row_dict["id"],)
                 )
                 row_dict["attachments"] = [dict(att) for att in cursor.fetchall()]
+                row_dict["reactions"] = self.get_message_reactions(row_dict["id"])
                 result.append(row_dict)
             return result
 
@@ -639,6 +652,7 @@ class DatabaseManager:
                     (row_dict["id"],)
                 )
                 row_dict["attachments"] = [dict(att) for att in cursor.fetchall()]
+                row_dict["reactions"] = self.get_message_reactions(row_dict["id"])
                 result.append(row_dict)
             return result
 
@@ -753,6 +767,41 @@ class DatabaseManager:
             cursor.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
             conn.commit()
             return cursor.rowcount > 0
+
+    def toggle_message_reaction(self, message_id: int, user_name: str, emoji: str) -> bool:
+        """Adds or removes a user's emoji reaction and returns whether it is active."""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id FROM message_reactions
+                WHERE message_id = ? AND user_name = ? AND emoji = ?
+            """, (message_id, user_name.strip(), emoji))
+            row = cursor.fetchone()
+            if row:
+                cursor.execute("DELETE FROM message_reactions WHERE id = ?", (row["id"],))
+                active = False
+            else:
+                cursor.execute("""
+                    INSERT INTO message_reactions (message_id, user_name, emoji, created_at)
+                    VALUES (?, ?, ?, ?)
+                """, (message_id, user_name.strip(), emoji, now_str))
+                active = True
+            conn.commit()
+            return active
+
+    def get_message_reactions(self, message_id: int) -> list:
+        """Returns grouped reaction counts for a message."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT emoji, COUNT(*) AS count
+                FROM message_reactions
+                WHERE message_id = ?
+                GROUP BY emoji
+                ORDER BY MIN(created_at) ASC
+            """, (message_id,))
+            return [dict(row) for row in cursor.fetchall()]
 
     # ==========================================
     # SERWERY I KANAŁY TEKSTOWE (SQLITE)
