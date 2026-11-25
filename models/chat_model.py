@@ -102,3 +102,7 @@ class ChatModel:
             conversation=conversation,
             current_user=current_user
         )
+
+    def delete_message(self, message_id: int) -> bool:
+        """Deletes a message through the database layer."""
+        return self.db.delete_message(message_id)

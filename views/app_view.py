@@ -979,6 +979,12 @@ class AppView(ctk.CTkFrame):
             self.add_channel_button.configure(state="normal" if can_manage else "disabled")
         if hasattr(self, "manage_members_button"):
             self.manage_members_button.configure(state="normal" if can_manage else "disabled")
+        if hasattr(self, "virtual_chat"):
+            can_moderate = role in ("owner", "admin", "moderator")
+            self.virtual_chat.set_moderation_callback(
+                getattr(self.controller, "handle_delete_message", None),
+                enabled=can_moderate
+            )
         role_labels = {
             "owner": "Właściciel",
             "admin": "Administrator",

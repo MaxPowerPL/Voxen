@@ -2,6 +2,7 @@
 MODEL - Zarządzanie serwerami i kanałami tekstowymi w SQLite (Warstwa Modelu w MVC)
 """
 
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 from database.db import DatabaseManager
 
@@ -91,3 +92,16 @@ class ServerModel:
     def remove_member(self, server_id: int, user_id: int) -> tuple:
         """Removes a server member."""
         return self.db.remove_server_member(server_id, user_id)
+
+    def timeout_member(self, server_id: int, user_id: int, minutes: int) -> tuple:
+        """Times out a member for a bounded number of minutes."""
+        minutes = max(1, min(int(minutes), 10080))
+        expires = datetime.now() + timedelta(minutes=minutes)
+        expires_at = expires.strftime("%Y-%m-%d %H:%M:%S")
+        if not self.db.timeout_server_member(server_id, user_id, expires_at):
+            return False, "Nie udało się zapisać timeoutu."
+        return True, expires_at
+
+    def get_member_timeout(self, server_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        """Gets active timeout metadata for a member."""
+        return self.db.get_member_timeout(server_id, user_id)

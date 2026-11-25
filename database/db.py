@@ -147,6 +147,16 @@ class DatabaseManager:
                     UNIQUE(server_id, user_id)
                 );
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS member_timeouts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(server_id, user_id)
+                );
+            """)
 
             # Chat file and image attachments
             cursor.execute("""
@@ -687,6 +697,52 @@ class DatabaseManager:
                 WHERE (sender = ? AND target = ?) OR (sender = ? AND target = ?) OR (target = ?)
             """, (user, conv, conv, user, conv))
             conn.commit()
+
+    def delete_message(self, message_id: int) -> bool:
+        """Deletes a message and cascades attached metadata."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def timeout_server_member(
+        self,
+        server_id: int,
+        user_id: int,
+        expires_at: str
+    ) -> bool:
+        """Creates or updates a server-member timeout."""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO member_timeouts (server_id, user_id, expires_at, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(server_id, user_id) DO UPDATE SET expires_at = excluded.expires_at
+            """, (server_id, user_id, expires_at, now_str))
+            conn.commit()
+            return True
+
+    def get_member_timeout(self, server_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        """Returns active timeout metadata, or None when expired."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM member_timeouts
+                WHERE server_id = ? AND user_id = ?
+            """, (server_id, user_id))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            if row["expires_at"] <= datetime.now().strftime("%Y-%m-%d %H:%M:%S"):
+                cursor.execute("""
+                    DELETE FROM member_timeouts
+                    WHERE server_id = ? AND user_id = ?
+                """, (server_id, user_id))
+                conn.commit()
+                return None
+            return dict(row)
 
     # ==========================================
     # ZAŁĄCZNIKI WIADOMOŚCI

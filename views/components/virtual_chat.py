@@ -121,6 +121,35 @@ class PooledMessageWidget(ctk.CTkFrame):
         self.reaction_frame.pack(anchor="w", fill="x", pady=(2, 2))
         self._reaction_callback = None
         self._message_id = None
+        self._moderation_callback = None
+        self.moderation_frame = ctk.CTkFrame(
+            self.content_frame,
+            fg_color="transparent"
+        )
+        self.moderation_frame.pack(anchor="e", fill="x", pady=(0, 2))
+        self._moderation_button = ctk.CTkButton(
+            self.moderation_frame,
+            text="🗑",
+            width=34,
+            height=24,
+            fg_color="transparent",
+            hover_color=Colors.DND,
+            command=self._on_moderate
+        )
+
+    def set_moderation_callback(self, callback: Optional[Callable[[str], None]]) -> None:
+        self._moderation_callback = callback
+
+    def set_moderation_enabled(self, enabled: bool) -> None:
+        self._moderation_enabled = enabled
+        if enabled:
+            self._moderation_button.pack(side="right", padx=(4, 0), pady=2)
+        elif self._moderation_button.winfo_ismapped():
+            self._moderation_button.pack_forget()
+
+    def _on_moderate(self) -> None:
+        if self._moderation_callback:
+            self._moderation_callback(str(self._message_id))
 
     def set_reaction_callback(self, callback: Callable[[str, str], None]) -> None:
         self._reaction_callback = callback
@@ -235,6 +264,7 @@ class PooledMessageWidget(ctk.CTkFrame):
         )
         self._render_attachments(message.attachments)
         self._render_reactions(message.id, message.reactions)
+        self.set_moderation_enabled(getattr(self, "_moderation_enabled", False))
 
 
 class VirtualChatView(ctk.CTkFrame):
@@ -257,6 +287,8 @@ class VirtualChatView(ctk.CTkFrame):
         self.offsets: List[int] = [0]
         self.total_height: int = 0
         self.reaction_callback: Optional[Callable[[str, str], None]] = None
+        self.moderation_callback: Optional[Callable[[str], None]] = None
+        self.moderation_enabled: bool = False
 
         # Stan widoku i przewijania
         self.viewport_height: int = 1
@@ -345,6 +377,17 @@ class VirtualChatView(ctk.CTkFrame):
         self.reaction_callback = callback
         for widget in self.pool:
             widget.set_reaction_callback(callback)
+
+    def set_moderation_callback(
+        self,
+        callback: Optional[Callable[[str], None]],
+        enabled: bool = False
+    ) -> None:
+        self.moderation_callback = callback
+        self.moderation_enabled = enabled
+        for widget in self.pool:
+            widget.set_moderation_callback(callback)
+            widget.set_moderation_enabled(enabled)
 
     def add_message(
         self,
@@ -526,6 +569,8 @@ class VirtualChatView(ctk.CTkFrame):
         while len(self.pool) < visible_count + 4:
             new_widget = PooledMessageWidget(self.canvas_container)
             new_widget.set_reaction_callback(self.reaction_callback)
+            new_widget.set_moderation_callback(self.moderation_callback)
+            new_widget.set_moderation_enabled(self.moderation_enabled)
             self.bind_mousewheel(new_widget)
             self.bind_mousewheel(new_widget.content_frame)
             self.bind_mousewheel(new_widget.body_label)

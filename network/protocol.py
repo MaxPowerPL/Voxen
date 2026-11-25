@@ -26,6 +26,8 @@ class PacketType(str, Enum):
     MESSAGE_RECV = "message_recv"
     MESSAGE_ACK = "message_ack"
     REACTION_UPDATE = "reaction_update"
+    MESSAGE_DELETE = "message_delete"
+    MEMBER_TIMEOUT = "member_timeout"
 
     # Status i obecność
     STATUS_UPDATE = "status_update"

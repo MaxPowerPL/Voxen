@@ -131,6 +131,8 @@ class AppController:
         self.network.on(PacketType.STATUS_UPDATE, self._on_network_status_update)
         self.network.on(PacketType.PRESENCE_CHANGE, self._on_network_status_update)
         self.network.on(PacketType.REACTION_UPDATE, self._on_network_reaction)
+        self.network.on(PacketType.MESSAGE_DELETE, self._on_network_message_delete)
+        self.network.on(PacketType.MEMBER_TIMEOUT, self._on_network_member_timeout)
         self.network.on_state_change(self._on_connection_state_change)
 
         # Ustaw początkowy stan
@@ -255,6 +257,23 @@ class AppController:
 
             self.notifier.notify(title=notif_title, message=content)
             self._update_all_badges()
+
+    def _on_network_message_delete(self, packet: Packet) -> None:
+        message_id = packet.payload.get("message_id")
+        if message_id and self.chat_model.delete_message(int(message_id)):
+            self._load_conversation_history(self.current_conversation)
+
+    def _on_network_member_timeout(self, packet: Packet) -> None:
+        server_id = packet.payload.get("server_id")
+        user_id = packet.payload.get("user_id")
+        expires_at = packet.payload.get("expires_at")
+        if server_id and user_id and expires_at:
+            self.db.timeout_server_member(int(server_id), int(user_id), expires_at)
+            if hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast(
+                    "Moderacja",
+                    f"Użytkownik został wyciszony do {expires_at}"
+                )
 
     def _on_network_reaction(self, packet: Packet) -> None:
         """Handles a reaction update received from the network."""
@@ -674,6 +693,62 @@ class AppController:
             current = self.view.message_entry.get()
             self.view.message_entry.delete(0, "end")
             self.view.message_entry.insert(0, f"{current}{emoji}")
+
+    def handle_delete_message(self, message_id: str) -> None:
+        """Deletes a message when the active member can moderate."""
+        try:
+            db_message_id = int(message_id)
+        except (TypeError, ValueError):
+            return
+        if self.current_channel is None:
+            can_moderate = False
+        elif self.current_server_id:
+            actor_id = self.current_user.get("id", 1)
+            can_moderate = self.server_model.can_moderate(
+                self.current_server_id,
+                actor_id
+            )
+        else:
+            can_moderate = False
+        if not can_moderate:
+            return
+        if self.chat_model.delete_message(db_message_id):
+            self._load_conversation_history(self.current_conversation)
+            if self.network:
+                self.network.send_message_delete(
+                    db_message_id,
+                    self.current_conversation or "Direct Messages"
+                )
+
+    def handle_timeout_member(self, user_name: str, minutes: int = 10) -> None:
+        """Times out a member in the active server."""
+        if not self.current_server_id:
+            return
+        actor_id = self.current_user.get("id", 1)
+        if not self.server_model.can_moderate(self.current_server_id, actor_id):
+            return
+        member = next(
+            (
+                item for item in self.server_model.get_members(self.current_server_id)
+                if item["username"].lower() == user_name.strip().lower()
+                or item["email"].lower() == user_name.strip().lower()
+            ),
+            None
+        )
+        if not member:
+            return
+        success, expires_at = self.server_model.timeout_member(
+            self.current_server_id,
+            member["user_id"],
+            minutes
+        )
+        if success and self.network:
+            self.network.send_member_timeout(
+                server_id=self.current_server_id,
+                user_id=member["user_id"],
+                user_name=user_name,
+                expires_at=expires_at
+            )
 
     def handle_message_reaction(self, message_id: str, emoji: str) -> None:
         """Toggles a user's reaction and broadcasts it."""

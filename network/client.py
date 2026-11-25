@@ -369,6 +369,33 @@ class NetworkClient:
         )
         return self.send_packet(packet)
 
+    def send_message_delete(self, message_id: int, target: str) -> bool:
+        """Sends a moderation packet to delete a message."""
+        packet = Packet(
+            type=PacketType.MESSAGE_DELETE,
+            payload={"message_id": message_id, "target": target}
+        )
+        return self.send_packet(packet)
+
+    def send_member_timeout(
+        self,
+        server_id: int,
+        user_id: int,
+        user_name: str,
+        expires_at: str
+    ) -> bool:
+        """Sends a member timeout moderation update."""
+        packet = Packet(
+            type=PacketType.MEMBER_TIMEOUT,
+            payload={
+                "server_id": server_id,
+                "user_id": user_id,
+                "user_name": user_name,
+                "expires_at": expires_at
+            }
+        )
+        return self.send_packet(packet)
+
     def send_status(self, user: str, status: str, custom_status: str = "") -> bool:
         """Wysyła aktualizację statusu użytkownika"""
         packet = PacketFactory.status_update(user, status, custom_status)
