@@ -20,7 +20,8 @@ class ChatModel:
         packet_id: Optional[str] = None,
         timestamp: Optional[str] = None,
         is_dm: bool = True,
-        is_read: bool = True
+        is_read: bool = True,
+        reply_to_message_id: Optional[int] = None
     ) -> int:
         """Zapisuje wiadomość (przychodzącą lub wychodzącą) w bazie danych"""
         return self.db.save_message(
@@ -30,7 +31,8 @@ class ChatModel:
             packet_id=packet_id,
             timestamp=timestamp,
             is_dm=is_dm,
-            is_read=is_read
+            is_read=is_read,
+            reply_to_message_id=reply_to_message_id
         )
 
     def mark_as_read(self, conversation: str, current_user: str) -> int:
@@ -122,3 +124,11 @@ class ChatModel:
     def get_pinned_messages(self, conversation: str) -> list:
         """Gets pinned messages for the selected conversation."""
         return self.db.get_pinned_messages(conversation)
+
+    def get_thread_replies(self, root_message_id: int) -> list:
+        """Gets direct replies to a root message."""
+        return self.db.get_thread_replies(root_message_id)
+
+    def get_reply_context(self, reply_to_message_id: int) -> Optional[Dict[str, Any]]:
+        """Gets the parent message displayed above a threaded reply."""
+        return self.db.get_reply_context(reply_to_message_id)

@@ -919,6 +919,30 @@ class AppView(ctk.CTkFrame):
         )
         self.typing_label.pack(fill="x", padx=4, pady=(0, 2))
 
+        self.reply_context_frame = ctk.CTkFrame(
+            input_container,
+            fg_color=Colors.BG_MAIN,
+            height=32,
+            corner_radius=6
+        )
+        self.reply_context_label = ctk.CTkLabel(
+            self.reply_context_frame,
+            text="",
+            font=("Segoe UI", 11),
+            text_color=Colors.TEXT_SECONDARY,
+            anchor="w"
+        )
+        self.reply_context_label.pack(side="left", fill="x", expand=True, padx=8)
+        ctk.CTkButton(
+            self.reply_context_frame,
+            text="×",
+            width=28,
+            height=26,
+            fg_color="transparent",
+            hover_color=Colors.BG_RIGHT,
+            command=self._on_cancel_reply
+        ).pack(side="right", padx=4)
+
         # Frame z inputem (jak Discord)
         input_frame = ctk.CTkFrame(
             input_container,
@@ -990,6 +1014,27 @@ class AppView(ctk.CTkFrame):
         if self.controller:
             self.controller.handle_attach_click()
 
+    def _on_cancel_reply(self):
+        """Cancels threaded reply composition."""
+        if self.controller:
+            self.controller.handle_cancel_reply()
+
+    def set_reply_context(self, context: dict) -> None:
+        """Shows the parent message above the composer."""
+        sender = context.get("sender", "User")
+        content = context.get("content", "")
+        self.reply_context_label.configure(text=f"↩ Odpowiedź dla {sender}: {content}")
+        self.reply_context_frame.pack(
+            fill="x",
+            padx=4,
+            pady=(0, 2)
+        )
+
+    def clear_reply_context(self) -> None:
+        """Hides threaded reply context."""
+        self.reply_context_label.configure(text="")
+        self.reply_context_frame.pack_forget()
+
     def _on_pinned_messages_click(self):
         """Delegates pinned-message panel display to the controller."""
         if self.controller:
@@ -1019,6 +1064,9 @@ class AppView(ctk.CTkFrame):
             self.virtual_chat.set_pin_callback(
                 lambda message_id: controller.handle_toggle_pin(message_id),
                 enabled=True
+            )
+            self.virtual_chat.set_reply_callback(
+                lambda message_id: controller.handle_reply_to_message(int(message_id))
             )
 
     def update_channels_header(self, text):
@@ -1706,6 +1754,58 @@ class AppView(ctk.CTkFrame):
                 font=("Segoe UI", 17),
                 command=lambda e=emoji: _choose(e)
             ).grid(row=index // 6, column=index % 6, padx=3, pady=3)
+
+    def show_thread_modal(self, root_message_id: int, replies: list) -> None:
+        """Shows direct threaded replies for a message."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Wątek wiadomości")
+        dialog.geometry("520x420")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text=f"↩ Wątek wiadomości #{root_message_id}",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(16, 10))
+
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=320)
+        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        if not replies:
+            ctk.CTkLabel(
+                scroll,
+                text="Brak odpowiedzi w tym wątku.",
+                text_color=Colors.TEXT_SECONDARY
+            ).pack(pady=20)
+
+        for reply in replies:
+            card = ctk.CTkFrame(scroll, fg_color=Colors.BG_RIGHT, corner_radius=8)
+            card.pack(fill="x", pady=4)
+            ctk.CTkLabel(
+                card,
+                text=f"{reply.get('sender', 'User')} • {reply.get('timestamp', '')}",
+                font=Fonts.LABEL,
+                text_color=Colors.TEXT_PRIMARY,
+                anchor="w"
+            ).pack(fill="x", padx=10, pady=(8, 2))
+            ctk.CTkLabel(
+                card,
+                text=reply.get("content", ""),
+                text_color=Colors.TEXT_INPUT,
+                anchor="w",
+                justify="left",
+                wraplength=460
+            ).pack(fill="x", padx=10, pady=(0, 8))
+
+        ctk.CTkButton(
+            dialog,
+            text="Zamknij",
+            fg_color="transparent",
+            width=100,
+            command=dialog.destroy
+        ).pack(pady=(0, 12))
 
     def show_pinned_messages_modal(self, pinned_messages: list) -> None:
         """Shows pinned messages for the active conversation."""

@@ -39,6 +39,7 @@ class ChatMessageDTO:
     attachments: list = field(default_factory=list)
     reactions: list = field(default_factory=list)
     is_pinned: bool = False
+    reply_context: dict | None = None
 
     def __post_init__(self):
         if not self.timestamp:
@@ -127,6 +128,7 @@ class PooledMessageWidget(ctk.CTkFrame):
         self._bound_height: int = 0
         self._moderation_callback = None
         self._pin_callback = None
+        self._reply_callback = None
         self._is_pinned = False
         self.moderation_frame = ctk.CTkFrame(
             self.content_frame,
@@ -152,6 +154,17 @@ class PooledMessageWidget(ctk.CTkFrame):
             hover_color=Colors.DND,
             command=self._on_moderate
         )
+
+        self._reply_button = ctk.CTkButton(
+            self.moderation_frame,
+            text="↩",
+            width=34,
+            height=24,
+            fg_color="transparent",
+            hover_color=Colors.BUTTON_PRIMARY,
+            command=self._on_reply
+        )
+        self._reply_button.pack(side="right", padx=(4, 0), pady=2)
 
     def set_moderation_callback(self, callback: Optional[Callable[[str], None]]) -> None:
         self._moderation_callback = callback
@@ -179,6 +192,13 @@ class PooledMessageWidget(ctk.CTkFrame):
     def _on_pin(self) -> None:
         if self._pin_callback:
             self._pin_callback(str(self._message_id))
+
+    def set_reply_callback(self, callback: Optional[Callable[[str], None]]) -> None:
+        self._reply_callback = callback
+
+    def _on_reply(self) -> None:
+        if self._reply_callback:
+            self._reply_callback(str(self._message_id))
 
     def set_moderation_enabled(self, enabled: bool) -> None:
         self._moderation_enabled = enabled
@@ -333,6 +353,7 @@ class VirtualChatView(ctk.CTkFrame):
         self.total_height: int = 0
         self.reaction_callback: Optional[Callable[[str, str], None]] = None
         self.moderation_callback: Optional[Callable[[str], None]] = None
+        self.reply_callback: Optional[Callable[[str], None]] = None
         self.moderation_enabled: bool = False
         self.pin_callback: Optional[Callable[[str], None]] = None
         self.pin_enabled: bool = True
@@ -445,6 +466,11 @@ class VirtualChatView(ctk.CTkFrame):
         self.pin_enabled = enabled
         for widget in self.pool:
             widget.set_pin_callback(callback, enabled)
+
+    def set_reply_callback(self, callback: Optional[Callable[[str], None]]) -> None:
+        self.reply_callback = callback
+        for widget in self.pool:
+            widget.set_reply_callback(callback)
 
     def add_message(
         self,

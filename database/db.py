@@ -122,6 +122,8 @@ class DatabaseManager:
             cols = [col[1] for col in cursor.fetchall()]
             if "is_read" not in cols:
                 cursor.execute("ALTER TABLE messages ADD COLUMN is_read INTEGER DEFAULT 1;")
+            if "reply_to_message_id" not in cols:
+                cursor.execute("ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL;")
 
             # Tabela serwerów
             cursor.execute("""
@@ -550,7 +552,8 @@ class DatabaseManager:
         packet_id: Optional[str] = None,
         timestamp: Optional[str] = None,
         is_dm: bool = True,
-        is_read: bool = True
+        is_read: bool = True,
+        reply_to_message_id: Optional[int] = None
     ) -> int:
         """
         Trwale zapisuje wiadomość w bazie SQLite z oznaczeniem przeczytania.
@@ -563,9 +566,22 @@ class DatabaseManager:
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT OR IGNORE INTO messages (packet_id, sender, target, content, timestamp, is_dm, is_read, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (packet_id, sender.strip(), target.strip(), content, time_str, 1 if is_dm else 0, 1 if is_read else 0, now_str))
+                INSERT OR IGNORE INTO messages (
+                    packet_id, sender, target, content, timestamp, is_dm,
+                    is_read, created_at, reply_to_message_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                packet_id,
+                sender.strip(),
+                target.strip(),
+                content,
+                time_str,
+                1 if is_dm else 0,
+                1 if is_read else 0,
+                now_str,
+                reply_to_message_id
+            ))
             conn.commit()
             return cursor.lastrowid or 0
 
@@ -659,7 +675,7 @@ class DatabaseManager:
             # Pobieramy wiadomości wymienione między 'user' a 'conv',
             # lub wiadomości wysłane bezpośrednio do 'conv' (np. kanał lub Direct Messages ogólny)
             cursor.execute("""
-                SELECT id, packet_id, sender, target, content, timestamp, is_dm, created_at
+                SELECT id, packet_id, sender, target, content, timestamp, is_dm, created_at, reply_to_message_id
                 FROM messages
                 WHERE 
                     (sender = ? AND target = ?)
@@ -684,6 +700,16 @@ class DatabaseManager:
                 row_dict["attachments"] = [dict(att) for att in cursor.fetchall()]
                 row_dict["reactions"] = self.get_message_reactions(row_dict["id"])
                 row_dict["is_pinned"] = self.is_message_pinned(row_dict["id"])
+                row_dict["reply_context"] = None
+                if row_dict.get("reply_to_message_id"):
+                    cursor.execute("""
+                        SELECT id, sender, content, timestamp
+                        FROM messages
+                        WHERE id = ?
+                    """, (row_dict["reply_to_message_id"],))
+                    reply_row = cursor.fetchone()
+                    if reply_row:
+                        row_dict["reply_context"] = dict(reply_row)
                 row_dict["is_pinned"] = self.is_message_pinned(row_dict["id"])
                 result.append(row_dict)
             return result
@@ -734,7 +760,7 @@ class DatabaseManager:
             params.append(end_query)
 
         sql = """
-            SELECT id, packet_id, sender, target, content, timestamp, is_dm, created_at
+            SELECT id, packet_id, sender, target, content, timestamp, is_dm, created_at, reply_to_message_id
             FROM messages
             WHERE {where}
             ORDER BY id ASC
@@ -800,6 +826,36 @@ class DatabaseManager:
             cursor.execute("DELETE FROM messages WHERE id = ?", (message_id,))
             conn.commit()
             return cursor.rowcount > 0
+
+    def get_reply_context(self, reply_to_message_id: int) -> Optional[Dict[str, Any]]:
+        """Returns the parent message for a threaded reply."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, sender, target, content, timestamp, created_at
+                FROM messages
+                WHERE id = ?
+            """, (reply_to_message_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_thread_replies(self, root_message_id: int) -> list:
+        """Returns direct replies belonging to a root message."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, packet_id, sender, target, content, timestamp,
+                       is_dm, created_at, reply_to_message_id
+                FROM messages
+                WHERE reply_to_message_id = ?
+                ORDER BY id ASC
+            """, (root_message_id,))
+            result = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                item["reply_context"] = self.get_reply_context(root_message_id)
+                result.append(item)
+            return result
 
     def pin_message(
         self,

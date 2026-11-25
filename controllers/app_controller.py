@@ -61,6 +61,7 @@ class AppController:
         # Stan pisania użytkownika lokalnego (throttling & debounce)
         self._last_typing_sent: float = 0.0
         self._typing_stop_timer = None
+        self.reply_to_message_id: Optional[int] = None
 
         # Natywny system powiadomień Windows i in-app toast
         self.notifier = WindowsNotifier()
@@ -728,7 +729,8 @@ class AppController:
             sender=self.sender_name,
             target=target,
             content=message,
-            is_dm=is_dm
+            is_dm=is_dm,
+            reply_to_message_id=self.reply_to_message_id
         )
         if self.current_server_id:
             self.server_model.dispatch_webhook(
@@ -762,6 +764,7 @@ class AppController:
             )
         else:
             print(f"[Offline] Zapisano do bazy dla {target}: {message}")
+        self.reply_to_message_id = None
 
     def handle_attach_click(self):
         """Opens a file dialog, validates and stores a selected attachment."""
@@ -831,6 +834,33 @@ class AppController:
             current = self.view.message_entry.get()
             self.view.message_entry.delete(0, "end")
             self.view.message_entry.insert(0, f"{current}{emoji}")
+
+    def handle_reply_to_message(self, message_id: int) -> None:
+        """Starts composing a reply to a message."""
+        try:
+            self.reply_to_message_id = int(message_id)
+        except (TypeError, ValueError):
+            return
+        context = self.chat_model.db.get_reply_context(self.reply_to_message_id)
+        if context:
+            if hasattr(self.view, "set_reply_context"):
+                self.view.set_reply_context(context)
+
+    def handle_cancel_reply(self) -> None:
+        """Cancels the active reply composition."""
+        self.reply_to_message_id = None
+        if hasattr(self.view, "clear_reply_context"):
+            self.view.clear_reply_context()
+
+    def handle_show_thread(self, message_id: int) -> None:
+        """Shows direct replies for a root message."""
+        try:
+            root_id = int(message_id)
+        except (TypeError, ValueError):
+            return
+        replies = self.chat_model.get_thread_replies(root_id)
+        if hasattr(self.view, "show_thread_modal"):
+            self.view.show_thread_modal(root_id, replies)
 
     def handle_delete_message(self, message_id: str) -> None:
         """Deletes a message when the active member can moderate."""
