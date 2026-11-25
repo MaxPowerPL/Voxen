@@ -167,6 +167,17 @@ class DatabaseManager:
                     UNIQUE(server_id, user_id)
                 );
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS member_activity_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+                    actor_id INTEGER,
+                    target_user_id INTEGER,
+                    action TEXT NOT NULL,
+                    details TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+            """)
 
             # Chat file and image attachments
             cursor.execute("""
@@ -212,6 +223,8 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_server ON server_members(server_id);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_server_members_user ON server_members(user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_member_activity_server ON member_activity_logs(server_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_member_activity_created ON member_activity_logs(created_at);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_message_reactions_message ON message_reactions(message_id);")
 
             conn.commit()
@@ -713,6 +726,8 @@ class DatabaseManager:
         """Deletes a message and cascades attached metadata."""
         with self._lock, self._get_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("SELECT sender, target FROM messages WHERE id = ?", (message_id,))
+            row = cursor.fetchone()
             cursor.execute("DELETE FROM messages WHERE id = ?", (message_id,))
             conn.commit()
             return cursor.rowcount > 0
@@ -733,6 +748,13 @@ class DatabaseManager:
                 ON CONFLICT(server_id, user_id) DO UPDATE SET expires_at = excluded.expires_at
             """, (server_id, user_id, expires_at, now_str))
             conn.commit()
+            self.add_member_activity_log(
+                server_id,
+                None,
+                "member_timeout",
+                user_id,
+                f"Timeout expires at {expires_at}"
+            )
             return True
 
     def get_member_timeout(self, server_id: int, user_id: int) -> Optional[Dict[str, Any]]:
@@ -968,6 +990,13 @@ class DatabaseManager:
                     ON CONFLICT(server_id, user_id) DO UPDATE SET role = excluded.role
                 """, (server_id, user_id, role, now_str))
                 conn.commit()
+                self.add_member_activity_log(
+                    server_id,
+                    actor_id,
+                    "role_changed",
+                    user_id,
+                    f"Role changed to {role}"
+                )
                 return True, {"server_id": server_id, "user_id": user_id, "role": role}
         except Exception as exc:
             return False, f"Błąd bazy danych: {exc}"
@@ -1041,6 +1070,13 @@ class DatabaseManager:
                 ON CONFLICT(server_id, user_id) DO UPDATE SET role = excluded.role
             """, (server_id, user_id, role, now_str))
             conn.commit()
+            self.add_member_activity_log(
+                server_id,
+                None,
+                "member_added",
+                user_id,
+                f"Role set to {role}"
+            )
             return True, {"server_id": server_id, "user_id": user_id, "role": role}
 
     def remove_server_member(self, server_id: int, user_id: int) -> tuple:
@@ -1060,6 +1096,13 @@ class DatabaseManager:
             conn.commit()
             if cursor.rowcount == 0:
                 return False, "Użytkownik nie jest członkiem serwera."
+            self.add_member_activity_log(
+                server_id,
+                None,
+                "member_removed",
+                user_id,
+                "Member removed"
+            )
             return True, "Członek został usunięty."
 
     def can_manage_server(self, server_id: int, user_id: int) -> bool:
@@ -1069,6 +1112,62 @@ class DatabaseManager:
     def can_moderate_server(self, server_id: int, user_id: int) -> bool:
         """Owner, admin and moderator can moderate messages."""
         return self.get_server_member_role(server_id, user_id) in ("owner", "admin", "moderator")
+
+    def add_member_activity_log(
+        self,
+        server_id: int,
+        actor_id: Optional[int],
+        action: str,
+        target_user_id: Optional[int] = None,
+        details: str = ""
+    ) -> int:
+        """Writes a server-member moderation or role-change audit entry."""
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO member_activity_logs (
+                    server_id, actor_id, target_user_id, action, details, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                server_id,
+                actor_id,
+                target_user_id,
+                action.strip().lower(),
+                details.strip(),
+                now_str
+            ))
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_member_activity_logs(
+        self,
+        server_id: int,
+        limit: int = 200
+    ) -> list:
+        """Returns the newest member activity entries for a server."""
+        with self._lock, self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    log.id,
+                    log.server_id,
+                    log.actor_id,
+                    log.target_user_id,
+                    log.action,
+                    log.details,
+                    log.created_at,
+                    actor.username AS actor_name,
+                    target.username AS target_name
+                FROM member_activity_logs log
+                LEFT JOIN users actor ON actor.id = log.actor_id
+                LEFT JOIN users target ON target.id = log.target_user_id
+                WHERE log.server_id = ?
+                ORDER BY log.id DESC
+                LIMIT ?
+            """, (server_id, max(1, int(limit))))
+            return [dict(row) for row in cursor.fetchall()]
 
     def create_server(self, name: str, icon: str = "📁", owner_id: int = 1) -> tuple:
         """Tworzy nowy serwer i dodaje domyślny kanał #ogólny"""

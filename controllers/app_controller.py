@@ -433,6 +433,14 @@ class AppController:
 
         def add_member(user_id: int, role: str) -> None:
             success, result = self.server_model.add_member(server_id, user_id, role)
+            if success:
+                self.server_model.log_activity(
+                    server_id,
+                    actor_id,
+                    "member_added",
+                    user_id,
+                    f"Role set to {role}"
+                )
             if not success and hasattr(self.view, "show_in_app_toast"):
                 self.view.show_in_app_toast("Członkowie", str(result))
             refresh()
@@ -450,9 +458,21 @@ class AppController:
 
         def remove_member(user_id: int) -> None:
             success, result = self.server_model.remove_member(server_id, user_id)
+            if success:
+                self.server_model.log_activity(
+                    server_id,
+                    actor_id,
+                    "member_removed",
+                    user_id,
+                    "Member removed"
+                )
             if hasattr(self.view, "show_in_app_toast"):
                 self.view.show_in_app_toast("Członkowie", str(result))
             refresh()
+
+        def show_activity() -> None:
+            logs = self.server_model.get_activity_logs(server_id, limit=200)
+            self.view.show_activity_logs_modal(self.current_server, logs)
 
         self.view.show_manage_members_modal(
             server_name=self.current_server,
@@ -460,7 +480,8 @@ class AppController:
             available_users=available,
             add_callback=add_member,
             role_callback=set_role,
-            remove_callback=remove_member
+            remove_callback=remove_member,
+            activity_callback=show_activity
         )
 
     def handle_add_channel_click(self, server_id: int):
@@ -733,6 +754,14 @@ class AppController:
         if not can_moderate:
             return
         if self.chat_model.delete_message(db_message_id):
+            if self.current_server_id:
+                self.server_model.log_activity(
+                    self.current_server_id,
+                    self.current_user.get("id", 1),
+                    "message_deleted",
+                    None,
+                    f"Message {db_message_id} deleted"
+                )
             self._load_conversation_history(self.current_conversation)
             if self.network:
                 self.network.send_message_delete(
@@ -762,6 +791,14 @@ class AppController:
             member["user_id"],
             minutes
         )
+        if success:
+            self.server_model.log_activity(
+                self.current_server_id,
+                actor_id,
+                "member_timeout",
+                member["user_id"],
+                f"Timeout expires at {expires_at}"
+            )
         if success and self.network:
             self.network.send_member_timeout(
                 server_id=self.current_server_id,

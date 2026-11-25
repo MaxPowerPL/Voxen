@@ -106,6 +106,27 @@ class ServerModel:
         """Gets active timeout metadata for a member."""
         return self.db.get_member_timeout(server_id, user_id)
 
+    def log_activity(
+        self,
+        server_id: int,
+        actor_id: Optional[int],
+        action: str,
+        target_user_id: Optional[int] = None,
+        details: str = ""
+    ) -> int:
+        """Writes an activity log entry."""
+        return self.db.add_member_activity_log(
+            server_id,
+            actor_id,
+            action,
+            target_user_id,
+            details
+        )
+
+    def get_activity_logs(self, server_id: int, limit: int = 200) -> list:
+        """Gets server member activity logs."""
+        return self.db.get_member_activity_logs(server_id, limit)
+
     def set_channel_permission(
         self,
         channel_id: int,

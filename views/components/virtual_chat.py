@@ -121,6 +121,9 @@ class PooledMessageWidget(ctk.CTkFrame):
         self.reaction_frame.pack(anchor="w", fill="x", pady=(2, 2))
         self._reaction_callback = None
         self._message_id = None
+        self._bound_message_id: Optional[str] = None
+        self._bound_width: int = 0
+        self._bound_height: int = 0
         self._moderation_callback = None
         self.moderation_frame = ctk.CTkFrame(
             self.content_frame,
@@ -242,6 +245,10 @@ class PooledMessageWidget(ctk.CTkFrame):
 
     def bind_data(self, message: ChatMessageDTO, max_width: int = 600) -> None:
         """Szybkie przypisanie nowych danych bez alokacji widgetu"""
+        if self._bound_message_id == message.id and self._bound_width == max_width:
+            return
+        self._bound_message_id = message.id
+        self._bound_width = max_width
         self.avatar_label.configure(
             text=message.avatar,
             fg_color=Colors.BUTTON_SECONDARY if message.is_own else Colors.BG_MAIN
@@ -586,8 +593,9 @@ class VirtualChatView(ctk.CTkFrame):
             item_y = self.offsets[i] - top_y
             item_h = msg_dto.calculated_height
 
-            if widget.cget("height") != item_h:
+            if getattr(widget, "_bound_height", 0) != item_h:
                 widget.configure(height=item_h)
+                widget._bound_height = item_h
             widget.bind_data(msg_dto, max_width=self.viewport_width)
             widget.place(
                 x=6,

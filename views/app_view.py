@@ -1232,7 +1232,8 @@ class AppView(ctk.CTkFrame):
         available_users: list,
         add_callback,
         role_callback,
-        remove_callback
+        remove_callback,
+        activity_callback=None
     ) -> None:
         """Opens a modal for assigning roles and managing server membership."""
         dialog = ctk.CTkToplevel(self)
@@ -1323,6 +1324,63 @@ class AppView(ctk.CTkFrame):
                 hover_color=Colors.ERROR,
                 command=lambda uid=member["user_id"]: (remove_callback(uid), dialog.destroy())
             ).pack(side="right", padx=(4, 8), pady=6)
+
+        footer = ctk.CTkFrame(dialog, fg_color="transparent")
+        footer.pack(pady=(0, 12))
+        if activity_callback:
+            ctk.CTkButton(
+                footer,
+                text="Historia",
+                width=100,
+                fg_color=Colors.BG_RIGHT,
+                command=activity_callback
+            ).pack(side="left", padx=6)
+        ctk.CTkButton(
+            footer,
+            text="Zamknij",
+            fg_color="transparent",
+            width=100,
+            command=dialog.destroy
+        ).pack(side="left", padx=6)
+
+    def show_activity_logs_modal(self, server_name: str, logs: list) -> None:
+        """Shows a read-only member activity log modal."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Historia aktywności")
+        dialog.geometry("620x420")
+        dialog.resizable(False, False)
+        dialog.transient(self.winfo_toplevel())
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text=f"Historia aktywności: {server_name}",
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY
+        ).pack(pady=(16, 10))
+
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=320)
+        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        if not logs:
+            ctk.CTkLabel(
+                scroll,
+                text="Brak zapisów aktywności.",
+                text_color=Colors.TEXT_SECONDARY
+            ).pack(pady=20)
+        for entry in logs:
+            actor = entry.get("actor_name") or "System"
+            target = entry.get("target_name") or "—"
+            action = entry.get("action", "")
+            details = entry.get("details", "")
+            ctk.CTkLabel(
+                scroll,
+                text=f"{entry.get('created_at', '')}  •  {actor}  →  {target}\n{action}: {details}",
+                anchor="w",
+                justify="left",
+                text_color=Colors.TEXT_PRIMARY,
+                fg_color=Colors.BG_RIGHT,
+                corner_radius=6
+            ).pack(fill="x", pady=3, padx=4)
 
         ctk.CTkButton(
             dialog,
