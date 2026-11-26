@@ -22,17 +22,152 @@ class AppView(ctk.CTkFrame):
 
         self.user_data = user_data
         self.controller = None
+        self._modal_backdrop = None
+        self._active_popover = None
+        self._popover_dismiss_bind_id = None
 
         # Konfiguracja grid - 3 kolumny (serwery | kanały | czat)
         self.grid_columnconfigure(0, weight=0, minsize=72)    # Serwery (stała szerokość)
         self.grid_columnconfigure(1, weight=0, minsize=240)   # Kanały/DMs (stała szerokość)
-        self.grid_columnconfigure(2, weight=1)                # Czat (rozciągliwy)
+        self.grid_columnconfigure(2, weight=1, minsize=460)   # Czat (rozciągliwy)
         self.grid_rowconfigure(0, weight=1)
 
         # Utwórz sekcje
         self._create_servers_sidebar()
         self._create_channels_sidebar()
         self._create_chat_area()
+
+    # ==========================================
+    # IN-WINDOW MODALS & POPOVERS (SINGLE-WINDOW)
+    # ==========================================
+
+    def _close_in_window_modal(self) -> None:
+        """Closes any active in-window modal overlay."""
+        if getattr(self, "_modal_backdrop", None) is not None:
+            try:
+                self._modal_backdrop.destroy()
+            except Exception:
+                pass
+            self._modal_backdrop = None
+
+    def _close_in_window_popover(self) -> None:
+        """Closes any active in-window popover or context menu."""
+        if getattr(self, "_popover_dismiss_bind_id", None) is not None:
+            try:
+                self.winfo_toplevel().unbind("<Button-1>", self._popover_dismiss_bind_id)
+            except Exception:
+                pass
+            self._popover_dismiss_bind_id = None
+        if getattr(self, "_active_popover", None) is not None:
+            try:
+                self._active_popover.destroy()
+            except Exception:
+                pass
+            self._active_popover = None
+
+    def _open_in_window_modal(self, title: str, width: int, height: int):
+        """Creates a centered in-window modal overlay inside the main viewport."""
+        self._close_in_window_modal()
+        self._close_in_window_popover()
+
+        backdrop = ctk.CTkFrame(
+            self,
+            fg_color="#111214",
+            corner_radius=0
+        )
+        backdrop.place(relx=0, rely=0, relwidth=1, relheight=1)
+        backdrop.lift()
+        self._modal_backdrop = backdrop
+
+        vp_w = self.winfo_width() or 1080
+        vp_h = self.winfo_height() or 720
+        card_w = min(width, max(300, vp_w - 48))
+        card_h = min(height, max(220, vp_h - 48))
+
+        card = ctk.CTkFrame(
+            backdrop,
+            fg_color=Colors.BG_SECONDARY,
+            border_color="#3f4147",
+            border_width=1,
+            corner_radius=12,
+            width=card_w,
+            height=card_h
+        )
+        card.pack_propagate(False)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+
+        backdrop.bind("<Button-1>", lambda _e: self._close_in_window_modal())
+        card.bind("<Button-1>", lambda _e: "break")
+
+        header = ctk.CTkFrame(card, fg_color="transparent", height=40)
+        header.pack(fill="x", padx=14, pady=(10, 4))
+        header.pack_propagate(False)
+
+        ctk.CTkLabel(
+            header,
+            text=title,
+            font=Fonts.TITLE_SMALL,
+            text_color=Colors.TEXT_PRIMARY,
+            anchor="w"
+        ).pack(side="left", fill="x", expand=True)
+
+        ctk.CTkButton(
+            header,
+            text="✕",
+            width=28,
+            height=28,
+            fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
+            text_color=Colors.TEXT_SECONDARY,
+            command=self._close_in_window_modal
+        ).pack(side="right")
+
+        try:
+            self.winfo_toplevel().bind("<Escape>", lambda _e: self._close_in_window_modal(), add="+")
+        except Exception:
+            pass
+
+        return card
+
+    def _open_in_window_popover(self, width: int, height: int, x: int, y: int):
+        """Creates an in-window floating popover/menu clamped to the viewport."""
+        self._close_in_window_popover()
+
+        vp_w = self.winfo_width() or 1080
+        vp_h = self.winfo_height() or 720
+        clamped_x = max(8, min(x, max(8, vp_w - width - 8)))
+        clamped_y = max(8, min(y, max(8, vp_h - height - 8)))
+
+        popover = ctk.CTkFrame(
+            self,
+            fg_color=Colors.BG_SIDEBAR,
+            border_color="#3f4147",
+            border_width=1,
+            corner_radius=8,
+            width=width,
+            height=height
+        )
+        popover.pack_propagate(False)
+        popover.place(x=clamped_x, y=clamped_y)
+        popover.lift()
+        self._active_popover = popover
+
+        def _on_global_click(event):
+            curr = event.widget
+            while curr is not None:
+                if curr == popover:
+                    return
+                curr = getattr(curr, "master", None)
+            self._close_in_window_popover()
+
+        try:
+            root = self.winfo_toplevel()
+            self._popover_dismiss_bind_id = root.bind("<Button-1>", _on_global_click, add="+")
+            root.bind("<Escape>", lambda _e: self._close_in_window_popover(), add="+")
+        except Exception:
+            pass
+
+        return popover
 
     # ==========================================
     # LEWA KOLUMNA - SERWERY (jak Discord)
@@ -201,7 +336,71 @@ class AppView(ctk.CTkFrame):
                 self.server_badges = {}
             self.server_badges[key] = (badge_frame, badge_lbl)
 
+        if server_id not in (None, "add"):
+            for target in (button_container, btn):
+                target.bind(
+                    "<Button-3>",
+                    lambda e, sid=server_id, sname=tooltip: self._show_server_context_menu(e, sid, sname),
+                    add="+"
+                )
+
         return button_container
+
+    def _show_server_context_menu(self, event, server_id: int, server_name: str) -> None:
+        """Opens a Discord-style right-click context menu for a server icon."""
+        rel_x = event.x_root - self.winfo_rootx() + 6
+        rel_y = event.y_root - self.winfo_rooty()
+        menu = self._open_in_window_popover(width=220, height=202, x=rel_x, y=rel_y)
+
+        ctk.CTkLabel(
+            menu,
+            text=server_name[:24],
+            font=("Segoe UI", 11, "bold"),
+            text_color=Colors.TEXT_SECONDARY,
+            anchor="w"
+        ).pack(fill="x", padx=12, pady=(8, 4))
+
+        ctk.CTkFrame(menu, height=1, fg_color="#3f4147").pack(fill="x", padx=8, pady=(0, 4))
+
+        def _run_action(action):
+            self._close_in_window_popover()
+            action()
+
+        items = [
+            ("🎨  Zarządzanie rolami", lambda: self.controller and self.controller.handle_role_settings_click(server_id)),
+            ("👥  Członkowie serwera", lambda: self.controller and self.controller.handle_manage_members_click(server_id)),
+            ("📊  Statystyki serwera", lambda: self.controller and self.controller.handle_analytics_click(server_id)),
+        ]
+        for label, cmd in items:
+            ctk.CTkButton(
+                menu,
+                text=label,
+                anchor="w",
+                height=30,
+                fg_color="transparent",
+                hover_color=Colors.BUTTON_SECONDARY,
+                text_color=Colors.TEXT_PRIMARY,
+                font=("Segoe UI", 12),
+                corner_radius=6,
+                command=lambda c=cmd: _run_action(c)
+            ).pack(fill="x", padx=6, pady=2)
+
+        ctk.CTkFrame(menu, height=1, fg_color="#3f4147").pack(fill="x", padx=8, pady=4)
+
+        ctk.CTkButton(
+            menu,
+            text="➕  Utwórz kanał",
+            anchor="w",
+            height=30,
+            fg_color="transparent",
+            hover_color=Colors.BUTTON_SECONDARY,
+            text_color=Colors.TEXT_PRIMARY,
+            font=("Segoe UI", 12),
+            corner_radius=6,
+            command=lambda: _run_action(
+                lambda: self.controller and self.controller.handle_add_channel_click(server_id)
+            )
+        ).pack(fill="x", padx=6, pady=(0, 6))
 
     def _on_server_click(self, server_id, server_name):
         """Deleguje do controllera"""
@@ -271,29 +470,6 @@ class AppView(ctk.CTkFrame):
             anchor="w"
         )
         self.server_name_label.pack(side="left", padx=16, fill="both", expand=True)
-
-        self.manage_members_button = ctk.CTkButton(
-            self.channels_header,
-            text="👥",
-            width=36,
-            height=32,
-            fg_color="transparent",
-            hover_color=Colors.BG_MAIN,
-            command=self._on_manage_members_click
-        )
-        self.manage_members_button.pack(side="right", padx=10)
-        self.manage_members_button.configure(state="disabled")
-
-        self.analytics_button = ctk.CTkButton(
-            self.channels_header,
-            text="📊",
-            width=36,
-            height=32,
-            fg_color="transparent",
-            hover_color=Colors.BG_MAIN,
-            command=self._on_analytics_click
-        )
-        self.analytics_button.pack(side="right", padx=(0, 2))
 
         # === USER PANEL NA SAMYM DOLE (STAŁY) ===
         self._create_user_panel()
@@ -410,7 +586,7 @@ class AppView(ctk.CTkFrame):
             values=["position", "name", "name_desc", "topic"],
             variable=self.channel_sort_var,
             state="readonly",
-            width=110,
+            width=88,
             height=30,
             command=lambda _: self._on_channel_search()
         )
@@ -717,27 +893,15 @@ class AppView(ctk.CTkFrame):
         text_lbl.configure(text=display_text)
 
     def show_status_selection_modal(self, current_status: str, current_custom_status: str, callback):
-        """Wyświetla okno modalne wyboru statusu (Dostępny, Zaraz wracam, DND, Niewidoczny)"""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Ustaw status obecności")
-        dialog.geometry("400x480")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
-
-        ctk.CTkLabel(
-            dialog,
-            text="Ustaw status obecności",
-            font=Fonts.TITLE_SMALL,
-            text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(18, 2))
+        """Wyświetla nakładkę wyboru statusu (Dostępny, Zaraz wracam, DND, Niewidoczny)"""
+        dialog = self._open_in_window_modal("Ustaw status obecności", 420, 490)
 
         ctk.CTkLabel(
             dialog,
             text="Wybierz jak chcesz być widoczny dla znajomych.",
             font=("Segoe UI", 11),
             text_color=Colors.TEXT_SECONDARY
-        ).pack(pady=(0, 14))
+        ).pack(pady=(2, 12))
 
         status_var = ctk.StringVar(value=current_status.lower() if current_status else "online")
 
@@ -789,7 +953,7 @@ class AppView(ctk.CTkFrame):
         def _submit():
             sel_status = status_var.get()
             c_text = custom_entry.get().strip()
-            dialog.destroy()
+            self._close_in_window_modal()
             callback(sel_status, c_text)
 
         btn_box = ctk.CTkFrame(dialog, fg_color="transparent")
@@ -801,7 +965,7 @@ class AppView(ctk.CTkFrame):
             fg_color="transparent",
             hover_color=Colors.BG_MAIN,
             width=100,
-            command=dialog.destroy
+            command=self._close_in_window_modal
         ).pack(side="left")
 
         ctk.CTkButton(
@@ -864,38 +1028,53 @@ class AppView(ctk.CTkFrame):
         self.history_search_entry = ctk.CTkEntry(
             chat_header,
             placeholder_text="Szukaj w historii",
-            width=150,
+            placeholder_text_color="#949ba4",
+            width=140,
             height=30,
-            fg_color=Colors.BG_RIGHT,
-            border_width=0,
-            font=Fonts.INPUT
+            corner_radius=6,
+            fg_color=Colors.BG_SIDEBAR,
+            border_width=1,
+            border_color="#3f4147",
+            font=("Segoe UI", 12)
         )
         self.history_search_entry.pack(side="right", padx=(4, 4))
         self.history_search_entry.bind("<KeyRelease>", self._on_history_search)
+        self.history_search_entry.bind("<FocusIn>", lambda _e: self.history_search_entry.configure(border_color="#5865f2"))
+        self.history_search_entry.bind("<FocusOut>", lambda _e: self.history_search_entry.configure(border_color="#3f4147"))
 
         self.history_sender_entry = ctk.CTkEntry(
             chat_header,
             placeholder_text="Nadawca",
-            width=90,
+            placeholder_text_color="#949ba4",
+            width=96,
             height=30,
-            fg_color=Colors.BG_RIGHT,
-            border_width=0,
-            font=Fonts.INPUT
+            corner_radius=6,
+            fg_color=Colors.BG_SIDEBAR,
+            border_width=1,
+            border_color="#3f4147",
+            font=("Segoe UI", 12)
         )
         self.history_sender_entry.pack(side="right", padx=(4, 4))
         self.history_sender_entry.bind("<KeyRelease>", self._on_history_search)
+        self.history_sender_entry.bind("<FocusIn>", lambda _e: self.history_sender_entry.configure(border_color="#5865f2"))
+        self.history_sender_entry.bind("<FocusOut>", lambda _e: self.history_sender_entry.configure(border_color="#3f4147"))
 
         self.history_timestamp_entry = ctk.CTkEntry(
             chat_header,
             placeholder_text="Czas HH:MM",
-            width=90,
+            placeholder_text_color="#949ba4",
+            width=88,
             height=30,
-            fg_color=Colors.BG_RIGHT,
-            border_width=0,
-            font=Fonts.INPUT
+            corner_radius=6,
+            fg_color=Colors.BG_SIDEBAR,
+            border_width=1,
+            border_color="#3f4147",
+            font=("Segoe UI", 12)
         )
         self.history_timestamp_entry.pack(side="right", padx=(4, 4))
         self.history_timestamp_entry.bind("<KeyRelease>", self._on_history_search)
+        self.history_timestamp_entry.bind("<FocusIn>", lambda _e: self.history_timestamp_entry.configure(border_color="#5865f2"))
+        self.history_timestamp_entry.bind("<FocusOut>", lambda _e: self.history_timestamp_entry.configure(border_color="#3f4147"))
 
         # Wskaźnik stanu sieci i latencji (Discord-like connection badge)
         self.net_status_label = ctk.CTkLabel(
@@ -904,7 +1083,7 @@ class AppView(ctk.CTkFrame):
             font=("Segoe UI", 11),
             text_color=Colors.ONLINE
         )
-        self.net_status_label.pack(side="right", padx=16)
+        self.net_status_label.pack(side="right", padx=(6, 8))
 
         # === OBSZAR WIADOMOŚCI - WIRTUALIZOWANY (OBJECT POOLING O(1)) ===
         self.virtual_chat = VirtualChatView(
@@ -920,11 +1099,9 @@ class AppView(ctk.CTkFrame):
         """Tworzy pole do wpisywania wiadomości"""
         input_container = ctk.CTkFrame(
             self.chat_frame,
-            fg_color="transparent",
-            height=74
+            fg_color="transparent"
         )
         input_container.pack(fill="x", padx=16, pady=(0, 16))
-        input_container.pack_propagate(False)
 
         # Wskaźnik "pisze..." (typing indicator)
         self.typing_label = ctk.CTkLabel(
@@ -932,16 +1109,20 @@ class AppView(ctk.CTkFrame):
             text="",
             font=("Segoe UI", 11, "italic"),
             text_color=Colors.TEXT_SECONDARY,
-            anchor="w"
+            anchor="w",
+            height=18
         )
         self.typing_label.pack(fill="x", padx=4, pady=(0, 2))
 
         self.reply_context_frame = ctk.CTkFrame(
             input_container,
-            fg_color=Colors.BG_MAIN,
+            fg_color=Colors.BG_SECONDARY,
+            border_color="#3f4147",
+            border_width=1,
             height=32,
             corner_radius=6
         )
+        self.reply_context_frame.pack_propagate(False)
         self.reply_context_label = ctk.CTkLabel(
             self.reply_context_frame,
             text="",
@@ -961,13 +1142,15 @@ class AppView(ctk.CTkFrame):
         ).pack(side="right", padx=4)
 
         # Frame z inputem (jak Discord)
-        input_frame = ctk.CTkFrame(
+        self.input_frame = ctk.CTkFrame(
             input_container,
             fg_color=Colors.INPUT_BG,
             corner_radius=8,
             height=44
         )
-        input_frame.pack(fill="both", expand=True)
+        self.input_frame.pack(fill="x")
+        self.input_frame.pack_propagate(False)
+        input_frame = self.input_frame
 
         # Przycisk dodaj plik
         attach_btn = ctk.CTkButton(
@@ -1039,13 +1222,19 @@ class AppView(ctk.CTkFrame):
     def set_reply_context(self, context: dict) -> None:
         """Shows the parent message above the composer."""
         sender = context.get("sender", "User")
-        content = context.get("content", "")
+        content = (context.get("content", "") or "").replace("\n", " ")
+        if len(content) > 80:
+            content = content[:77] + "..."
         self.reply_context_label.configure(text=f"↩ Odpowiedź dla {sender}: {content}")
-        self.reply_context_frame.pack(
-            fill="x",
-            padx=4,
-            pady=(0, 2)
-        )
+        if not self.reply_context_frame.winfo_ismapped():
+            self.reply_context_frame.pack(
+                fill="x",
+                padx=4,
+                pady=(0, 4),
+                before=self.input_frame
+            )
+        if hasattr(self, "message_entry"):
+            self.message_entry.focus_set()
 
     def clear_reply_context(self) -> None:
         """Hides threaded reply context."""
@@ -1082,6 +1271,9 @@ class AppView(ctk.CTkFrame):
         if hasattr(self, "virtual_chat"):
             self.virtual_chat.set_reaction_callback(
                 lambda message_id, emoji: controller.handle_message_reaction(message_id, emoji)
+            )
+            self.virtual_chat.set_react_prompt_callback(
+                lambda message_id: controller.handle_message_react_prompt(message_id)
             )
             self.virtual_chat.set_pin_callback(
                 lambda message_id: controller.handle_toggle_pin(message_id),
@@ -1127,23 +1319,6 @@ class AppView(ctk.CTkFrame):
         """Updates server-management controls for the current member role."""
         if hasattr(self, "add_channel_button"):
             self.add_channel_button.configure(state="normal" if can_manage else "disabled")
-        if hasattr(self, "manage_members_button"):
-            self.manage_members_button.configure(state="normal" if can_manage else "disabled")
-        if can_manage and hasattr(self, "channels_header"):
-            if not hasattr(self, "role_settings_button"):
-                self.role_settings_button = ctk.CTkButton(
-                    self.channels_header,
-                    text="🎨",
-                    width=36,
-                    height=32,
-                    fg_color="transparent",
-                    hover_color=Colors.BG_MAIN,
-                    command=lambda: self.controller.handle_role_settings_click()
-                )
-                self.role_settings_button.pack(side="right", padx=(0, 2))
-            self.role_settings_button.configure(state="normal")
-        elif hasattr(self, "role_settings_button"):
-            self.role_settings_button.configure(state="disabled")
         if hasattr(self, "virtual_chat"):
             can_moderate = role in ("owner", "admin", "moderator")
             self.virtual_chat.set_moderation_callback(
@@ -1367,7 +1542,7 @@ class AppView(ctk.CTkFrame):
         )
         m_lbl.pack(fill="x")
 
-        self._toast_frame.place(relx=0.82, rely=0.07, anchor="center")
+        self._toast_frame.place(relx=1.0, x=-16, y=58, anchor="ne")
         self._toast_frame.lift()
 
         def _dismiss(e=None):
@@ -1404,37 +1579,25 @@ class AppView(ctk.CTkFrame):
         self.dms_panel.pack(fill="both", expand=True)
 
     def show_create_server_modal(self, callback):
-        """Otwiera okno modalne tworzenia nowego serwera"""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Stwórz serwer")
-        dialog.geometry("380x320")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
-
-        ctk.CTkLabel(
-            dialog,
-            text="Stwórz własny serwer",
-            font=Fonts.TITLE_SMALL,
-            text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(20, 4))
+        """Otwiera nakładkę tworzenia nowego serwera"""
+        dialog = self._open_in_window_modal("Stwórz własny serwer", 400, 320)
 
         ctk.CTkLabel(
             dialog,
             text="Twój serwer to przestrzeń do rozmów i gier ze znajomymi.",
             font=("Segoe UI", 11),
             text_color=Colors.TEXT_SECONDARY
-        ).pack(pady=(0, 16))
+        ).pack(pady=(2, 14))
 
-        ctk.CTkLabel(dialog, text="NAZWA SERWERA", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=30)
+        ctk.CTkLabel(dialog, text="NAZWA SERWERA", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=28)
         name_entry = ctk.CTkEntry(dialog, placeholder_text="np. Społeczność Python", font=Fonts.INPUT)
-        name_entry.pack(fill="x", padx=30, pady=(4, 12))
+        name_entry.pack(fill="x", padx=28, pady=(4, 12))
         name_entry.focus()
 
-        ctk.CTkLabel(dialog, text="WYBIERZ IKONĘ", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=30)
+        ctk.CTkLabel(dialog, text="WYBIERZ IKONĘ", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=28)
         icon_var = ctk.StringVar(value="🚀")
         icon_frame = ctk.CTkFrame(dialog, fg_color="transparent")
-        icon_frame.pack(fill="x", padx=30, pady=(4, 20))
+        icon_frame.pack(fill="x", padx=28, pady=(4, 18))
 
         emojis = ["🚀", "🎮", "💻", "🎵", "🎨", "⚔️", "🛡️", "🌐"]
         for em in emojis:
@@ -1450,13 +1613,13 @@ class AppView(ctk.CTkFrame):
         def _submit():
             s_name = name_entry.get().strip()
             if s_name:
-                dialog.destroy()
+                self._close_in_window_modal()
                 callback(s_name, icon_var.get())
 
         btn_box = ctk.CTkFrame(dialog, fg_color="transparent")
-        btn_box.pack(fill="x", padx=30)
+        btn_box.pack(fill="x", padx=28)
 
-        ctk.CTkButton(btn_box, text="Anuluj", fg_color="transparent", hover_color=Colors.BG_MAIN, width=100, command=dialog.destroy).pack(side="left")
+        ctk.CTkButton(btn_box, text="Anuluj", fg_color="transparent", hover_color=Colors.BG_MAIN, width=100, command=self._close_in_window_modal).pack(side="left")
         ctk.CTkButton(btn_box, text="Utwórz", fg_color=Colors.BUTTON_PRIMARY, hover_color=Colors.BUTTON_PRIMARY_HOVER, width=120, command=_submit).pack(side="right")
         name_entry.bind("<Return>", lambda e: _submit())
 
@@ -1468,90 +1631,96 @@ class AppView(ctk.CTkFrame):
         rgb_callback,
         assign_callback
     ) -> None:
-        """Opens the role color, RGB and assignment editor."""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Ustawienia ról i kolorów")
-        dialog.geometry("560x520")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
-
-        ctk.CTkLabel(
-            dialog,
-            text="🎨 Role i kolory nicków",
-            font=Fonts.TITLE_SMALL,
-            text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(16, 10))
+        """Opens the role color, RGB and assignment editor inside the main window."""
+        dialog = self._open_in_window_modal("🎨 Role i kolory nicków", 620, 540)
 
         swatches = [
             "#ff3333", "#5865f2", "#23a55a", "#f0b232",
             "#a855f7", "#d946ef", "#00d9ff", "#b5bac1"
         ]
-        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=300)
-        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=320)
+        scroll.pack(fill="both", expand=True, padx=18, pady=(4, 8))
 
         for role in roles:
-            row = ctk.CTkFrame(scroll, fg_color=Colors.BG_RIGHT, corner_radius=8)
-            row.pack(fill="x", pady=4)
-            ctk.CTkLabel(
-                row,
+            card = ctk.CTkFrame(scroll, fg_color=Colors.BG_RIGHT, corner_radius=8)
+            card.pack(fill="x", pady=5)
+
+            top_row = ctk.CTkFrame(card, fg_color="transparent")
+            top_row.pack(fill="x", padx=10, pady=(8, 4))
+
+            role_label = ctk.CTkLabel(
+                top_row,
                 text=f"{role['name']}  •  priorytet {role['priority']}",
                 text_color=role["color"],
                 font=Fonts.LABEL,
                 anchor="w"
-            ).pack(side="left", padx=10, fill="x", expand=True)
+            )
+            role_label.pack(side="left", fill="x", expand=True)
+
+            hex_var = ctk.StringVar(value=role["color"])
+
+            def _apply_color(r_name=role["name"], col=None, lbl=role_label, hv=hex_var):
+                chosen = col if col is not None else hv.get().strip()
+                hv.set(chosen)
+                try:
+                    lbl.configure(text_color=chosen)
+                except Exception:
+                    pass
+                color_callback(r_name, chosen)
+
+            ctk.CTkEntry(
+                top_row,
+                textvariable=hex_var,
+                width=82,
+                height=28
+            ).pack(side="left", padx=4)
+            ctk.CTkButton(
+                top_row,
+                text="Zapisz",
+                width=64,
+                height=28,
+                command=lambda fn=_apply_color: fn()
+            ).pack(side="left", padx=(2, 0))
+
+            bottom_row = ctk.CTkFrame(card, fg_color="transparent")
+            bottom_row.pack(fill="x", padx=10, pady=(2, 8))
 
             for swatch in swatches:
                 ctk.CTkButton(
-                    row,
+                    bottom_row,
                     text="",
                     width=24,
                     height=24,
                     fg_color=swatch,
                     hover_color=swatch,
                     border_width=0,
-                    command=lambda c=swatch, r=role["name"]: color_callback(r, c)
-                ).pack(side="left", padx=1)
-
-            hex_var = ctk.StringVar(value=role["color"])
-            ctk.CTkEntry(
-                row,
-                textvariable=hex_var,
-                width=76,
-                height=28
-            ).pack(side="left", padx=4)
-            ctk.CTkButton(
-                row,
-                text="Zapisz",
-                width=62,
-                height=28,
-                command=lambda r=role["name"], v=hex_var: color_callback(r, v.get())
-            ).pack(side="left", padx=4)
+                    command=lambda c=swatch, fn=_apply_color: fn(col=c)
+                ).pack(side="left", padx=2)
 
             interval_var = ctk.StringVar(
                 value=str(role["rgb_interval_ms"])
             )
             rgb_var = ctk.BooleanVar(value=role["is_rgb"])
+            ctk.CTkComboBox(
+                bottom_row,
+                values=["5000", "10000"],
+                variable=interval_var,
+                state="readonly",
+                width=82,
+                height=26,
+                command=lambda value, r=role["name"], rv=rgb_var:
+                    rgb_callback(r, rv.get(), int(value))
+            ).pack(side="right", padx=(4, 0))
             ctk.CTkSwitch(
-                row,
+                bottom_row,
                 text="RGB",
                 variable=rgb_var,
                 command=lambda r=role["name"], rv=rgb_var, iv=interval_var:
                     rgb_callback(r, rv.get(), int(iv.get()))
-            ).pack(side="left", padx=5)
-            ctk.CTkComboBox(
-                row,
-                values=["5000", "10000"],
-                variable=interval_var,
-                state="readonly",
-                width=78,
-                height=28,
-                command=lambda value, r=role["name"], rv=rgb_var:
-                    rgb_callback(r, rv.get(), int(value))
-            ).pack(side="left", padx=4)
+            ).pack(side="right", padx=6)
 
-        assign_frame = ctk.CTkFrame(dialog, fg_color=Colors.BG_RIGHT)
-        assign_frame.pack(fill="x", padx=20, pady=(0, 10))
+        assign_frame = ctk.CTkFrame(dialog, fg_color=Colors.BG_RIGHT, corner_radius=8)
+        assign_frame.pack(fill="x", padx=18, pady=(0, 8))
         member_names = {
             f"{member['username']} ({member['email']})": member["user_id"]
             for member in members
@@ -1563,7 +1732,7 @@ class AppView(ctk.CTkFrame):
             values=list(member_names) or ["Brak członków"],
             variable=member_var,
             state="readonly",
-            width=230
+            width=240
         ).pack(side="left", padx=8, pady=8)
         ctk.CTkComboBox(
             assign_frame,
@@ -1575,7 +1744,7 @@ class AppView(ctk.CTkFrame):
         ctk.CTkButton(
             assign_frame,
             text="Przypisz",
-            width=75,
+            width=80,
             command=lambda: assign_callback(
                 member_names.get(member_var.get()),
                 role_var.get()
@@ -1586,8 +1755,9 @@ class AppView(ctk.CTkFrame):
             dialog,
             text="Zamknij",
             fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
             width=100,
-            command=dialog.destroy
+            command=self._close_in_window_modal
         ).pack(pady=(0, 12))
 
     def show_manage_members_modal(
@@ -1600,23 +1770,11 @@ class AppView(ctk.CTkFrame):
         remove_callback,
         activity_callback=None
     ) -> None:
-        """Opens a modal for assigning roles and managing server membership."""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Członkowie serwera")
-        dialog.geometry("520x460")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
+        """Opens an in-window modal for assigning roles and managing server membership."""
+        dialog = self._open_in_window_modal(f"Członkowie: {server_name}", 540, 470)
 
-        ctk.CTkLabel(
-            dialog,
-            text=f"Członkowie: {server_name}",
-            font=Fonts.TITLE_SMALL,
-            text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(16, 10))
-
-        add_frame = ctk.CTkFrame(dialog, fg_color=Colors.BG_RIGHT)
-        add_frame.pack(fill="x", padx=20, pady=(0, 10))
+        add_frame = ctk.CTkFrame(dialog, fg_color=Colors.BG_RIGHT, corner_radius=8)
+        add_frame.pack(fill="x", padx=18, pady=(4, 10))
 
         user_names = {
             f"{u['username']} ({u['email']})": u["id"]
@@ -1644,7 +1802,6 @@ class AppView(ctk.CTkFrame):
             user_id = user_names.get(user_var.get())
             if user_id is not None:
                 add_callback(user_id, role_var.get())
-                dialog.destroy()
 
         ctk.CTkButton(
             add_frame,
@@ -1656,14 +1813,14 @@ class AppView(ctk.CTkFrame):
         scroll = ctk.CTkScrollableFrame(
             dialog,
             fg_color="transparent",
-            height=300
+            height=290
         )
-        scroll.pack(fill="both", expand=True, padx=20, pady=(4, 10))
+        scroll.pack(fill="both", expand=True, padx=18, pady=(4, 10))
 
         for member in members:
             if member["role"] == "owner":
                 continue
-            row = ctk.CTkFrame(scroll, fg_color=Colors.BG_RIGHT)
+            row = ctk.CTkFrame(scroll, fg_color=Colors.BG_RIGHT, corner_radius=8)
             row.pack(fill="x", pady=3)
             ctk.CTkLabel(
                 row,
@@ -1687,7 +1844,7 @@ class AppView(ctk.CTkFrame):
                 width=58,
                 fg_color=Colors.DND,
                 hover_color=Colors.ERROR,
-                command=lambda uid=member["user_id"]: (remove_callback(uid), dialog.destroy())
+                command=lambda uid=member["user_id"]: remove_callback(uid)
             ).pack(side="right", padx=(4, 8), pady=6)
 
         footer = ctk.CTkFrame(dialog, fg_color="transparent")
@@ -1704,28 +1861,21 @@ class AppView(ctk.CTkFrame):
             footer,
             text="Zamknij",
             fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
             width=100,
-            command=dialog.destroy
+            command=self._close_in_window_modal
         ).pack(side="left", padx=6)
 
     def show_server_analytics_modal(self, analytics: dict) -> None:
-        """Shows aggregate server metrics in a compact modal."""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Analityka serwera")
-        dialog.geometry("520x360")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
-
-        ctk.CTkLabel(
-            dialog,
-            text=f"📊 {analytics.get('server_name', 'Serwer')}",
-            font=Fonts.TITLE_SMALL,
-            text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(16, 12))
+        """Shows aggregate server metrics in an in-window modal."""
+        dialog = self._open_in_window_modal(
+            f"📊 {analytics.get('server_name', 'Serwer')}",
+            540,
+            350
+        )
 
         grid = ctk.CTkFrame(dialog, fg_color="transparent")
-        grid.pack(fill="x", padx=20)
+        grid.pack(fill="x", padx=20, pady=(8, 0))
         cards = [
             ("Członkowie", analytics.get("member_count", 0)),
             ("Kanały", analytics.get("channel_count", 0)),
@@ -1750,7 +1900,7 @@ class AppView(ctk.CTkFrame):
 
         role_counts = analytics.get("role_counts", {})
         role_frame = ctk.CTkFrame(dialog, fg_color=Colors.BG_RIGHT, corner_radius=8)
-        role_frame.pack(fill="x", padx=20, pady=20)
+        role_frame.pack(fill="x", padx=20, pady=18)
         ctk.CTkLabel(
             role_frame,
             text="Role członków",
@@ -1772,28 +1922,17 @@ class AppView(ctk.CTkFrame):
             dialog,
             text="Zamknij",
             fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
             width=100,
-            command=dialog.destroy
+            command=self._close_in_window_modal
         ).pack(pady=(0, 12))
 
     def show_activity_logs_modal(self, server_name: str, logs: list) -> None:
-        """Shows a read-only member activity log modal."""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Historia aktywności")
-        dialog.geometry("620x420")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
+        """Shows a read-only member activity log in-window modal."""
+        dialog = self._open_in_window_modal(f"Historia aktywności: {server_name}", 620, 430)
 
-        ctk.CTkLabel(
-            dialog,
-            text=f"Historia aktywności: {server_name}",
-            font=Fonts.TITLE_SMALL,
-            text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(16, 10))
-
-        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=320)
-        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=310)
+        scroll.pack(fill="both", expand=True, padx=18, pady=(4, 10))
         if not logs:
             ctk.CTkLabel(
                 scroll,
@@ -1810,6 +1949,7 @@ class AppView(ctk.CTkFrame):
                 text=f"{entry.get('created_at', '')}  •  {actor}  →  {target}\n{action}: {details}",
                 anchor="w",
                 justify="left",
+                wraplength=540,
                 text_color=Colors.TEXT_PRIMARY,
                 fg_color=Colors.BG_RIGHT,
                 corner_radius=6
@@ -1819,46 +1959,35 @@ class AppView(ctk.CTkFrame):
             dialog,
             text="Zamknij",
             fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
             width=100,
-            command=dialog.destroy
+            command=self._close_in_window_modal
         ).pack(pady=(0, 12))
 
     def show_create_channel_modal(self, server_name: str, callback):
-        """Otwiera okno modalne tworzenia nowego kanału tekstowego"""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Utwórz kanał")
-        dialog.geometry("380x280")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
+        """Otwiera nakładkę tworzenia nowego kanału tekstowego"""
+        dialog = self._open_in_window_modal(f"Utwórz kanał w {server_name}", 400, 270)
 
-        ctk.CTkLabel(
-            dialog,
-            text=f"Utwórz kanał w {server_name}",
-            font=Fonts.TITLE_SMALL,
-            text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(20, 4))
-
-        ctk.CTkLabel(dialog, text="NAZWA KANAŁU", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=30)
+        ctk.CTkLabel(dialog, text="NAZWA KANAŁU", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=28, pady=(8, 0))
         name_entry = ctk.CTkEntry(dialog, placeholder_text="np. dyskusje", font=Fonts.INPUT)
-        name_entry.pack(fill="x", padx=30, pady=(4, 12))
+        name_entry.pack(fill="x", padx=28, pady=(4, 12))
         name_entry.focus()
 
-        ctk.CTkLabel(dialog, text="TEMAT KANAŁU (OPCJONALNY)", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=30)
+        ctk.CTkLabel(dialog, text="TEMAT KANAŁU (OPCJONALNY)", font=("Segoe UI", 11, "bold"), text_color=Colors.TEXT_SECONDARY, anchor="w").pack(fill="x", padx=28)
         topic_entry = ctk.CTkEntry(dialog, placeholder_text="O czym rozmawiamy na tym kanale?", font=Fonts.INPUT)
-        topic_entry.pack(fill="x", padx=30, pady=(4, 20))
+        topic_entry.pack(fill="x", padx=28, pady=(4, 18))
 
         def _submit():
             c_name = name_entry.get().strip()
             c_topic = topic_entry.get().strip()
             if c_name:
-                dialog.destroy()
+                self._close_in_window_modal()
                 callback(c_name, c_topic)
 
         btn_box = ctk.CTkFrame(dialog, fg_color="transparent")
-        btn_box.pack(fill="x", padx=30)
+        btn_box.pack(fill="x", padx=28)
 
-        ctk.CTkButton(btn_box, text="Anuluj", fg_color="transparent", hover_color=Colors.BG_MAIN, width=100, command=dialog.destroy).pack(side="left")
+        ctk.CTkButton(btn_box, text="Anuluj", fg_color="transparent", hover_color=Colors.BG_MAIN, width=100, command=self._close_in_window_modal).pack(side="left")
         ctk.CTkButton(btn_box, text="Utwórz", fg_color=Colors.BUTTON_PRIMARY, hover_color=Colors.BUTTON_PRIMARY_HOVER, width=120, command=_submit).pack(side="right")
         name_entry.bind("<Return>", lambda e: _submit())
 
@@ -1876,7 +2005,8 @@ class AppView(ctk.CTkFrame):
         attachments: list | None = None,
         reactions: list | None = None,
         message_id: int | None = None,
-        nickname_color: str = ""
+        nickname_color: str = "",
+        reply_context: dict | None = None
     ):
         """Dodaje nową wiadomość do wirtualizowanego czatu (O(1))"""
         self.virtual_chat.add_message(
@@ -1888,7 +2018,8 @@ class AppView(ctk.CTkFrame):
             attachments=attachments,
             reactions=reactions,
             message_id=message_id,
-            nickname_color=nickname_color
+            nickname_color=nickname_color,
+            reply_context=reply_context
         )
 
     def load_message_history(self, messages_data: list):
@@ -1900,59 +2031,49 @@ class AppView(ctk.CTkFrame):
         self.virtual_chat.clear()
 
     def show_emoji_picker(self, callback) -> None:
-        """Shows a compact emoji picker and delegates the selected emoji."""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Emoji")
-        dialog.geometry("300x170")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
+        """Shows an in-window emoji picker popover and delegates the selected emoji."""
+        vp_w = self.winfo_width() or 1080
+        vp_h = self.winfo_height() or 720
+        popover = self._open_in_window_popover(
+            width=292,
+            height=138,
+            x=vp_w - 312,
+            y=vp_h - 210
+        )
 
         ctk.CTkLabel(
-            dialog,
+            popover,
             text="Wybierz emoji",
-            font=Fonts.TITLE_SMALL,
+            font=("Segoe UI", 12, "bold"),
             text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(12, 8))
+        ).pack(pady=(8, 4))
 
-        frame = ctk.CTkFrame(dialog, fg_color="transparent")
-        frame.pack(padx=12, pady=8)
+        frame = ctk.CTkFrame(popover, fg_color="transparent")
+        frame.pack(padx=10, pady=4)
         emojis = ["😀", "😂", "😍", "👍", "👎", "🎉", "❤️", "🔥", "🚀", "🎮", "💻", "🎨"]
 
         def _choose(emoji: str) -> None:
-            dialog.destroy()
+            self._close_in_window_popover()
             callback(emoji)
 
         for index, emoji in enumerate(emojis):
             ctk.CTkButton(
                 frame,
                 text=emoji,
-                width=42,
-                height=36,
+                width=40,
+                height=34,
                 fg_color=Colors.BG_RIGHT,
-                hover_color=Colors.BUTTON_PRIMARY,
+                hover_color=Colors.BUTTON_SECONDARY,
                 font=("Segoe UI", 17),
                 command=lambda e=emoji: _choose(e)
             ).grid(row=index // 6, column=index % 6, padx=3, pady=3)
 
     def show_channel_bookmarks_modal(self, bookmarks: list) -> None:
-        """Shows and allows quick access to bookmarked channels."""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Zakładki kanałów")
-        dialog.geometry("460x380")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
+        """Shows and allows quick access to bookmarked channels in an in-window modal."""
+        dialog = self._open_in_window_modal("⭐ Zakładki kanałów", 460, 380)
 
-        ctk.CTkLabel(
-            dialog,
-            text="⭐ Zakładki kanałów",
-            font=Fonts.TITLE_SMALL,
-            text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(16, 10))
-
-        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=280)
-        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=260)
+        scroll.pack(fill="both", expand=True, padx=18, pady=(4, 10))
         if not bookmarks:
             ctk.CTkLabel(
                 scroll,
@@ -1974,7 +2095,7 @@ class AppView(ctk.CTkFrame):
                 cname=channel_name,
                 ctype=channel_type
             ):
-                dialog.destroy()
+                self._close_in_window_modal()
                 if self.controller:
                     self.controller.handle_server_click(sid, sname)
                     self.controller.handle_channel_click(
@@ -1997,28 +2118,17 @@ class AppView(ctk.CTkFrame):
             dialog,
             text="Zamknij",
             fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
             width=100,
-            command=dialog.destroy
+            command=self._close_in_window_modal
         ).pack(pady=(0, 12))
 
     def show_thread_modal(self, root_message_id: int, replies: list) -> None:
-        """Shows direct threaded replies for a message."""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Wątek wiadomości")
-        dialog.geometry("520x420")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
+        """Shows direct threaded replies for a message in an in-window modal."""
+        dialog = self._open_in_window_modal(f"↩ Wątek wiadomości #{root_message_id}", 520, 420)
 
-        ctk.CTkLabel(
-            dialog,
-            text=f"↩ Wątek wiadomości #{root_message_id}",
-            font=Fonts.TITLE_SMALL,
-            text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(16, 10))
-
-        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=320)
-        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=300)
+        scroll.pack(fill="both", expand=True, padx=18, pady=(4, 10))
         if not replies:
             ctk.CTkLabel(
                 scroll,
@@ -2042,35 +2152,24 @@ class AppView(ctk.CTkFrame):
                 text_color=Colors.TEXT_INPUT,
                 anchor="w",
                 justify="left",
-                wraplength=460
+                wraplength=440
             ).pack(fill="x", padx=10, pady=(0, 8))
 
         ctk.CTkButton(
             dialog,
             text="Zamknij",
             fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
             width=100,
-            command=dialog.destroy
+            command=self._close_in_window_modal
         ).pack(pady=(0, 12))
 
     def show_pinned_messages_modal(self, pinned_messages: list) -> None:
-        """Shows pinned messages for the active conversation."""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Przypięte wiadomości")
-        dialog.geometry("520x420")
-        dialog.resizable(False, False)
-        dialog.transient(self.winfo_toplevel())
-        dialog.grab_set()
+        """Shows pinned messages for the active conversation in an in-window modal."""
+        dialog = self._open_in_window_modal("📌 Przypięte wiadomości", 520, 420)
 
-        ctk.CTkLabel(
-            dialog,
-            text="📌 Przypięte wiadomości",
-            font=Fonts.TITLE_SMALL,
-            text_color=Colors.TEXT_PRIMARY
-        ).pack(pady=(16, 10))
-
-        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=320)
-        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        scroll = ctk.CTkScrollableFrame(dialog, fg_color="transparent", height=300)
+        scroll.pack(fill="both", expand=True, padx=18, pady=(4, 10))
         if not pinned_messages:
             ctk.CTkLabel(
                 scroll,
@@ -2094,7 +2193,7 @@ class AppView(ctk.CTkFrame):
                 text_color=Colors.TEXT_INPUT,
                 justify="left",
                 anchor="w",
-                wraplength=460
+                wraplength=440
             ).pack(fill="x", padx=10, pady=(0, 6))
             ctk.CTkLabel(
                 card,
@@ -2108,8 +2207,9 @@ class AppView(ctk.CTkFrame):
             dialog,
             text="Zamknij",
             fg_color="transparent",
+            hover_color=Colors.BG_MAIN,
             width=100,
-            command=dialog.destroy
+            command=self._close_in_window_modal
         ).pack(pady=(0, 12))
 
     def show_voice_status(self, channel_name: str, participants: list) -> None:

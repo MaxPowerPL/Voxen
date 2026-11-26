@@ -79,6 +79,16 @@ class PooledMessageWidget(ctk.CTkFrame):
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.content_frame.pack(side="left", fill="both", expand=True)
 
+        # 2b. Kontekst odpowiedzi (opcjonalny cytat nad nagłówkiem)
+        self.reply_quote_label = ctk.CTkLabel(
+            self.content_frame,
+            text="",
+            font=("Segoe UI", 11),
+            text_color=Colors.TEXT_SECONDARY,
+            anchor="w",
+            justify="left"
+        )
+
         # 3. Header: Nadawca + Czas
         self.header_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         self.header_frame.pack(anchor="w", fill="x")
@@ -123,49 +133,115 @@ class PooledMessageWidget(ctk.CTkFrame):
         )
         self.reaction_frame.pack(anchor="w", fill="x", pady=(2, 2))
         self._reaction_callback = None
+        self._react_prompt_callback = None
         self._message_id = None
         self._bound_message_id: Optional[str] = None
         self._bound_width: int = 0
         self._bound_height: int = 0
         self._moderation_callback = None
+        self._moderation_enabled = False
         self._pin_callback = None
         self._reply_callback = None
         self._is_pinned = False
-        self.moderation_frame = ctk.CTkFrame(
-            self.content_frame,
-            fg_color="transparent"
+        self._hover_hide_job = None
+
+        # Pływający pasek akcji zakotwiczony do prawego górnego rogu wiadomości (Discord-style)
+        self.action_toolbar = ctk.CTkFrame(
+            self,
+            fg_color=Colors.BG_SECONDARY,
+            border_color="#3f4147",
+            border_width=1,
+            corner_radius=6,
+            height=28
         )
-        self.moderation_frame.pack(anchor="e", fill="x", pady=(0, 2))
-        self._pin_button = ctk.CTkButton(
-            self.moderation_frame,
-            text="📌",
-            width=34,
+        self._reply_button = ctk.CTkButton(
+            self.action_toolbar,
+            text="↩",
+            width=28,
             height=24,
             fg_color="transparent",
-            hover_color=Colors.BUTTON_PRIMARY,
+            hover_color=Colors.BUTTON_SECONDARY,
+            font=("Segoe UI", 12),
+            command=self._on_reply
+        )
+        self._reply_button.pack(side="left", padx=2, pady=2)
+
+        self._react_button = ctk.CTkButton(
+            self.action_toolbar,
+            text="😀",
+            width=28,
+            height=24,
+            fg_color="transparent",
+            hover_color=Colors.BUTTON_SECONDARY,
+            font=("Segoe UI", 12),
+            command=self._on_react_prompt
+        )
+        self._react_button.pack(side="left", padx=2, pady=2)
+
+        self._pin_button = ctk.CTkButton(
+            self.action_toolbar,
+            text="📌",
+            width=28,
+            height=24,
+            fg_color="transparent",
+            hover_color=Colors.BUTTON_SECONDARY,
+            font=("Segoe UI", 12),
             command=self._on_pin
         )
-        self._pin_button.pack_forget()
         self._moderation_button = ctk.CTkButton(
-            self.moderation_frame,
+            self.action_toolbar,
             text="🗑",
-            width=34,
+            width=28,
             height=24,
             fg_color="transparent",
             hover_color=Colors.DND,
+            font=("Segoe UI", 12),
             command=self._on_moderate
         )
 
-        self._reply_button = ctk.CTkButton(
-            self.moderation_frame,
-            text="↩",
-            width=34,
-            height=24,
-            fg_color="transparent",
-            hover_color=Colors.BUTTON_PRIMARY,
-            command=self._on_reply
-        )
-        self._reply_button.pack(side="right", padx=(4, 0), pady=2)
+        self._bind_hover_recursive(self)
+
+    def _bind_hover_recursive(self, widget) -> None:
+        widget.bind("<Enter>", self._on_hover_enter, add="+")
+        widget.bind("<Leave>", self._on_hover_leave, add="+")
+        for child in widget.winfo_children():
+            self._bind_hover_recursive(child)
+
+    def _on_hover_enter(self, _event=None) -> None:
+        if self._hover_hide_job is not None:
+            try:
+                self.after_cancel(self._hover_hide_job)
+            except Exception:
+                pass
+            self._hover_hide_job = None
+        self.configure(fg_color="#2e3035")
+        if not self.action_toolbar.winfo_ismapped():
+            self.action_toolbar.place(relx=1.0, x=-10, y=4, anchor="ne")
+        self.action_toolbar.lift()
+
+    def _on_hover_leave(self, _event=None) -> None:
+        if self._hover_hide_job is not None:
+            try:
+                self.after_cancel(self._hover_hide_job)
+            except Exception:
+                pass
+        self._hover_hide_job = self.after(45, self._check_and_hide_toolbar)
+
+    def _check_and_hide_toolbar(self) -> None:
+        self._hover_hide_job = None
+        try:
+            px, py = self.winfo_pointerxy()
+            hovered = self.winfo_containing(px, py)
+            curr = hovered
+            while curr is not None:
+                if curr == self:
+                    return
+                curr = getattr(curr, "master", None)
+        except Exception:
+            pass
+        self.configure(fg_color="transparent")
+        if self.action_toolbar.winfo_ismapped():
+            self.action_toolbar.place_forget()
 
     def set_moderation_callback(self, callback: Optional[Callable[[str], None]]) -> None:
         self._moderation_callback = callback
@@ -178,16 +254,18 @@ class PooledMessageWidget(ctk.CTkFrame):
         self._pin_callback = callback
         if enabled:
             self._pin_button.configure(state="normal")
-            self._pin_button.pack(side="right", padx=(4, 0), pady=2)
+            if not self._pin_button.winfo_ismapped():
+                self._pin_button.pack(side="left", padx=2, pady=2)
         else:
             self._pin_button.configure(state="disabled")
-            self._pin_button.pack_forget()
+            if self._pin_button.winfo_ismapped():
+                self._pin_button.pack_forget()
 
     def set_pinned(self, pinned: bool) -> None:
         self._is_pinned = pinned
         self._pin_button.configure(
             text="📌",
-            fg_color=Colors.BUTTON_PRIMARY if pinned else "transparent"
+            fg_color=Colors.BUTTON_SECONDARY if pinned else "transparent"
         )
 
     def _on_pin(self) -> None:
@@ -201,10 +279,18 @@ class PooledMessageWidget(ctk.CTkFrame):
         if self._reply_callback:
             self._reply_callback(str(self._message_id))
 
+    def set_react_prompt_callback(self, callback: Optional[Callable[[str], None]]) -> None:
+        self._react_prompt_callback = callback
+
+    def _on_react_prompt(self) -> None:
+        if self._react_prompt_callback:
+            self._react_prompt_callback(str(self._message_id))
+
     def set_moderation_enabled(self, enabled: bool) -> None:
         self._moderation_enabled = enabled
         if enabled:
-            self._moderation_button.pack(side="right", padx=(4, 0), pady=2)
+            if not self._moderation_button.winfo_ismapped():
+                self._moderation_button.pack(side="left", padx=2, pady=2)
         elif self._moderation_button.winfo_ismapped():
             self._moderation_button.pack_forget()
 
@@ -303,6 +389,7 @@ class PooledMessageWidget(ctk.CTkFrame):
 
     def bind_data(self, message: ChatMessageDTO, max_width: int = 600) -> None:
         """Szybkie przypisanie nowych danych bez alokacji widgetu"""
+        self._message_id = message.id
         if self._bound_message_id == message.id and self._bound_width == max_width:
             return
         self._bound_message_id = message.id
@@ -311,6 +398,22 @@ class PooledMessageWidget(ctk.CTkFrame):
             text=message.avatar,
             fg_color=Colors.BUTTON_SECONDARY if message.is_own else Colors.BG_MAIN
         )
+
+        wrap_val = max(180, max_width - 110)
+
+        if message.reply_context:
+            r_sender = message.reply_context.get("sender", "User")
+            r_content = (message.reply_context.get("content", "") or "").replace("\n", " ")
+            if len(r_content) > 65:
+                r_content = r_content[:62] + "..."
+            self.reply_quote_label.configure(
+                text=f"╭─ ↩ {r_sender}: {r_content}",
+                wraplength=wrap_val
+            )
+            if not self.reply_quote_label.winfo_ismapped():
+                self.reply_quote_label.pack(anchor="w", fill="x", pady=(0, 2), before=self.header_frame)
+        elif self.reply_quote_label.winfo_ismapped():
+            self.reply_quote_label.pack_forget()
 
         sender_color = message.nickname_color or (Colors.BUTTON_PRIMARY if message.is_own else (
             Colors.ICON_COLOR if message.is_bot or "Bot" in message.sender else Colors.TEXT_PRIMARY
@@ -322,7 +425,6 @@ class PooledMessageWidget(ctk.CTkFrame):
         self.time_label.configure(text=message.timestamp)
 
         # Dopasowanie zawijania tekstu do szerokości okna
-        wrap_val = max(250, max_width - 80)
         self.body_label.configure(
             text=message.content,
             wraplength=wrap_val
@@ -353,6 +455,7 @@ class VirtualChatView(ctk.CTkFrame):
         self.offsets: List[int] = [0]
         self.total_height: int = 0
         self.reaction_callback: Optional[Callable[[str, str], None]] = None
+        self.react_prompt_callback: Optional[Callable[[str], None]] = None
         self.moderation_callback: Optional[Callable[[str], None]] = None
         self.reply_callback: Optional[Callable[[str], None]] = None
         self.moderation_enabled: bool = False
@@ -417,7 +520,7 @@ class VirtualChatView(ctk.CTkFrame):
         Szybka aproksymacja wysokości wiadomości na podstawie znaków i podziałów linii.
         O(1) bez obciążania silnika renderowania.
         """
-        chars_per_line = max(20, (width - 100) // 8)
+        chars_per_line = max(18, (width - 120) // 8)
         lines = 0
         for paragraph in content.split("\n"):
             p_len = len(paragraph)
@@ -430,9 +533,12 @@ class VirtualChatView(ctk.CTkFrame):
         content: str,
         width: int,
         attachments: list | None = None,
-        reactions: list | None = None
+        reactions: list | None = None,
+        reply_context: dict | None = None
     ) -> int:
         height = self._estimate_message_height(content, width)
+        if reply_context:
+            height += 22
         for attachment in attachments or []:
             if attachment.get("file_type") == "image" and attachment.get("thumbnail_path"):
                 height += 220
@@ -446,6 +552,11 @@ class VirtualChatView(ctk.CTkFrame):
         self.reaction_callback = callback
         for widget in self.pool:
             widget.set_reaction_callback(callback)
+
+    def set_react_prompt_callback(self, callback: Optional[Callable[[str], None]]) -> None:
+        self.react_prompt_callback = callback
+        for widget in self.pool:
+            widget.set_react_prompt_callback(callback)
 
     def set_moderation_callback(
         self,
@@ -483,7 +594,8 @@ class VirtualChatView(ctk.CTkFrame):
         attachments: Optional[list] = None,
         reactions: Optional[list] = None,
         message_id: Optional[int] = None,
-        nickname_color: str = ""
+        nickname_color: str = "",
+        reply_context: Optional[dict] = None
     ) -> None:
         """
         Dodaje nową wiadomość do wirtualnej historii czatu.
@@ -492,7 +604,9 @@ class VirtualChatView(ctk.CTkFrame):
         if self.welcome_label and self.welcome_label.winfo_ismapped():
             self.welcome_label.place_forget()
 
-        h = self._estimate_rendered_height(content, self.viewport_width, attachments, reactions)
+        h = self._estimate_rendered_height(
+            content, self.viewport_width, attachments, reactions, reply_context
+        )
         dto = ChatMessageDTO(
             id=str(message_id if message_id is not None else len(self.messages)),
             sender=sender,
@@ -503,6 +617,7 @@ class VirtualChatView(ctk.CTkFrame):
             calculated_height=h,
             attachments=attachments or [],
             reactions=reactions or [],
+            reply_context=reply_context,
             nickname_color=nickname_color
         )
 
@@ -528,12 +643,17 @@ class VirtualChatView(ctk.CTkFrame):
 
         self.messages.clear()
         self.offsets = [0]
+        for w in self.pool:
+            w._bound_message_id = None
 
         for item in messages_data:
             content = item.get("content", "")
             attachments = item.get("attachments", [])
             reactions = item.get("reactions", [])
-            h = self._estimate_rendered_height(content, self.viewport_width, attachments, reactions)
+            reply_context = item.get("reply_context")
+            h = self._estimate_rendered_height(
+                content, self.viewport_width, attachments, reactions, reply_context
+            )
             dto = ChatMessageDTO(
                 id=str(item.get("id", len(self.messages))),
                 sender=item.get("sender", "User"),
@@ -545,6 +665,7 @@ class VirtualChatView(ctk.CTkFrame):
                 attachments=attachments,
                 reactions=reactions,
                 is_pinned=item.get("is_pinned", False),
+                reply_context=reply_context,
                 nickname_color=item.get("nickname_color", "")
             )
             self.messages.append(dto)
@@ -557,6 +678,8 @@ class VirtualChatView(ctk.CTkFrame):
         """Czyści historię wiadomości i chowa widgety z puli"""
         self.messages.clear()
         self.offsets = [0]
+        for w in self.pool:
+            w._bound_message_id = None
         self.total_height = 0
         self.scroll_y = 0.0
         for w in self.pool:
@@ -612,7 +735,7 @@ class VirtualChatView(ctk.CTkFrame):
         if event.width <= 10 or event.height <= 10:
             return
 
-        width_changed = abs(event.width - self.viewport_width) > 30
+        width_changed = abs(event.width - self.viewport_width) > 8
         self.viewport_width = event.width
         self.viewport_height = event.height
 
@@ -620,7 +743,13 @@ class VirtualChatView(ctk.CTkFrame):
         if width_changed and self.messages:
             self.offsets = [0]
             for msg in self.messages:
-                h = self._estimate_rendered_height(msg.content, self.viewport_width, msg.attachments, msg.reactions)
+                h = self._estimate_rendered_height(
+                    msg.content,
+                    self.viewport_width,
+                    msg.attachments,
+                    msg.reactions,
+                    msg.reply_context
+                )
                 msg.calculated_height = h
                 self.offsets.append(self.offsets[-1] + h)
             self.total_height = self.offsets[-1]
@@ -657,8 +786,11 @@ class VirtualChatView(ctk.CTkFrame):
         while len(self.pool) < visible_count + 4:
             new_widget = PooledMessageWidget(self.canvas_container)
             new_widget.set_reaction_callback(self.reaction_callback)
+            new_widget.set_react_prompt_callback(self.react_prompt_callback)
             new_widget.set_moderation_callback(self.moderation_callback)
             new_widget.set_moderation_enabled(self.moderation_enabled)
+            new_widget.set_pin_callback(self.pin_callback, self.pin_enabled)
+            new_widget.set_reply_callback(self.reply_callback)
             self.bind_mousewheel(new_widget)
             self.bind_mousewheel(new_widget.content_frame)
             self.bind_mousewheel(new_widget.body_label)

@@ -583,19 +583,25 @@ class AppController:
         if hasattr(self.view, "show_server_analytics_modal"):
             self.view.show_server_analytics_modal(analytics)
 
-    def handle_role_settings_click(self) -> None:
+    def handle_role_settings_click(self, server_id: Optional[int] = None) -> None:
         """Opens the role color, RGB and assignment editor."""
-        if not self.current_server_id:
+        target_server_id = server_id if server_id is not None else self.current_server_id
+        if not target_server_id:
             return
         actor_id = self.current_user.get("id", 1)
-        if not self.server_model.can_manage(self.current_server_id, actor_id):
+        if not self.server_model.can_manage(target_server_id, actor_id):
+            if hasattr(self.view, "show_in_app_toast"):
+                self.view.show_in_app_toast(
+                    "Uprawnienia",
+                    "Tylko właściciel lub administrator może zarządzać rolami."
+                )
             return
-        roles = self.server_model.get_roles(self.current_server_id)
-        members = self.server_model.get_members(self.current_server_id)
+        roles = self.server_model.get_roles(target_server_id)
+        members = self.server_model.get_members(target_server_id)
 
         def update_color(role_name: str, color: str) -> None:
             success, result = self.server_model.update_role_color(
-                self.current_server_id,
+                target_server_id,
                 role_name,
                 color
             )
@@ -605,7 +611,7 @@ class AppController:
 
         def toggle_rgb(role_name: str, is_rgb: bool, interval_ms: int) -> None:
             success, result = self.server_model.toggle_role_rgb(
-                self.current_server_id,
+                target_server_id,
                 role_name,
                 is_rgb,
                 interval_ms
@@ -618,7 +624,7 @@ class AppController:
             if user_id is None:
                 return
             success, result = self.server_model.set_member_role(
-                self.current_server_id,
+                target_server_id,
                 user_id,
                 role_name,
                 actor_id
@@ -636,24 +642,35 @@ class AppController:
                 assign_callback=assign_role
             )
 
-    def handle_manage_members_click(self, server_id: int) -> None:
+    def _resolve_server_name(self, server_id: int) -> str:
+        """Resolves a server display name by ID."""
+        for srv in self.server_model.get_all_servers():
+            if srv.get("id") == server_id:
+                return srv.get("name", "Serwer")
+        return self.current_server or "Serwer"
+
+    def handle_manage_members_click(self, server_id: Optional[int] = None) -> None:
         """Opens server membership management for Owner/Admin users."""
+        target_server_id = server_id if server_id is not None else self.current_server_id
+        if not target_server_id:
+            return
         actor_id = self.current_user.get("id", 1)
-        if not self.server_model.can_manage(server_id, actor_id):
+        if not self.server_model.can_manage(target_server_id, actor_id):
             if hasattr(self.view, "show_in_app_toast"):
                 self.view.show_in_app_toast("Uprawnienia", "Tylko właściciel lub administrator może zarządzać członkami.")
             return
-        members = self.server_model.get_members(server_id)
-        available = self.server_model.get_available_users(server_id)
+        server_name = self._resolve_server_name(target_server_id)
+        members = self.server_model.get_members(target_server_id)
+        available = self.server_model.get_available_users(target_server_id)
 
         def refresh() -> None:
-            self.handle_manage_members_click(server_id)
+            self.handle_manage_members_click(target_server_id)
 
         def add_member(user_id: int, role: str) -> None:
-            success, result = self.server_model.add_member(server_id, user_id, role)
+            success, result = self.server_model.add_member(target_server_id, user_id, role)
             if success:
                 self.server_model.log_activity(
-                    server_id,
+                    target_server_id,
                     actor_id,
                     "member_added",
                     user_id,
@@ -665,7 +682,7 @@ class AppController:
 
         def set_role(user_id: int, role: str) -> None:
             success, result = self.server_model.set_member_role(
-                server_id,
+                target_server_id,
                 user_id,
                 role,
                 actor_id
@@ -675,10 +692,10 @@ class AppController:
             refresh()
 
         def remove_member(user_id: int) -> None:
-            success, result = self.server_model.remove_member(server_id, user_id)
+            success, result = self.server_model.remove_member(target_server_id, user_id)
             if success:
                 self.server_model.log_activity(
-                    server_id,
+                    target_server_id,
                     actor_id,
                     "member_removed",
                     user_id,
@@ -689,11 +706,11 @@ class AppController:
             refresh()
 
         def show_activity() -> None:
-            logs = self.server_model.get_activity_logs(server_id, limit=200)
-            self.view.show_activity_logs_modal(self.current_server, logs)
+            logs = self.server_model.get_activity_logs(target_server_id, limit=200)
+            self.view.show_activity_logs_modal(server_name, logs)
 
         self.view.show_manage_members_modal(
-            server_name=self.current_server,
+            server_name=server_name,
             members=members,
             available_users=available,
             add_callback=add_member,
@@ -702,16 +719,20 @@ class AppController:
             activity_callback=show_activity
         )
 
-    def handle_add_channel_click(self, server_id: int):
+    def handle_add_channel_click(self, server_id: Optional[int] = None):
         """Otwiera okno dialogowe tworzenia kanału tekstowego"""
+        target_server_id = server_id if server_id is not None else self.current_server_id
+        if not target_server_id:
+            return
         uid = self.current_user.get("id", 1)
-        if not self.server_model.can_manage(server_id, uid):
+        if not self.server_model.can_manage(target_server_id, uid):
             if hasattr(self.view, "show_in_app_toast"):
                 self.view.show_in_app_toast("Uprawnienia", "Tylko właściciel lub administrator może tworzyć kanały.")
             return
+        server_name = self._resolve_server_name(target_server_id)
         self.view.show_create_channel_modal(
-            server_name=self.current_server,
-            callback=lambda cname, ctopic: self._on_channel_created(server_id, cname, ctopic)
+            server_name=server_name,
+            callback=lambda cname, ctopic: self._on_channel_created(target_server_id, cname, ctopic)
         )
 
     def _on_channel_created(self, server_id: int, channel_name: str, topic: str):
@@ -877,6 +898,11 @@ class AppController:
 
         # 3. Wyświetl natychmiast własną wiadomość w wirtualnym czacie
         reactions = self.db.get_message_reactions(message_id) if message_id and self.db else []
+        reply_ctx = (
+            self.chat_model.get_reply_context(self.reply_to_message_id)
+            if self.reply_to_message_id
+            else None
+        )
         role_config = self.server_model.resolve_nickname_color(
             self.current_server_id,
             self.sender_name
@@ -887,7 +913,8 @@ class AppController:
             is_own=True,
             reactions=reactions,
             message_id=message_id,
-            nickname_color=role_config.get("color", "")
+            nickname_color=role_config.get("color", ""),
+            reply_context=reply_ctx
         )
 
         # 4. Wyślij asynchronicznie przez Network Engine do sieci
@@ -901,6 +928,8 @@ class AppController:
         else:
             print(f"[Offline] Zapisano do bazy dla {target}: {message}")
         self.reply_to_message_id = None
+        if hasattr(self.view, "clear_reply_context"):
+            self.view.clear_reply_context()
 
     def handle_attach_click(self):
         """Opens a file dialog, validates and stores a selected attachment."""
@@ -1109,6 +1138,13 @@ class AppController:
                 user_id=member["user_id"],
                 user_name=user_name,
                 expires_at=expires_at
+            )
+
+    def handle_message_react_prompt(self, message_id: str) -> None:
+        """Opens the in-window emoji picker to add a reaction to a message."""
+        if hasattr(self.view, "show_emoji_picker"):
+            self.view.show_emoji_picker(
+                lambda emoji: self.handle_message_reaction(message_id, emoji)
             )
 
     def handle_message_reaction(self, message_id: str, emoji: str) -> None:
